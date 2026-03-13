@@ -1,3 +1,5 @@
+<img width="1331" height="759" alt="image" src="https://github.com/user-attachments/assets/1ed2e7da-2196-418f-97d7-8bb8cec84dd3" />
+
 # Klein Edit Composite
 
 A ComfyUI custom node that composites a Klein edit back onto the original image using DIS optical flow change detection. Eliminates color drift by restoring original pixels everywhere Klein didn't intentionally change anything.
