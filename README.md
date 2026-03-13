@@ -5,7 +5,7 @@ A ComfyUI custom node that composites a Klein edit back onto the original image 
 Series of edits without the node:
 ![nonode](https://github.com/user-attachments/assets/4287b4a8-f58b-4b08-9e80-a41c5b165cd7)
 
-Series of edit with the node:
+Series of edits with the node:
 
 ![with-node](https://github.com/user-attachments/assets/6e29809a-e248-4c3f-a0e2-32aea222790a)
 
