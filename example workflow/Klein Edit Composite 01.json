@@ -1,8 +1,8 @@
 {
   "id": "92112d97-bb64-4b44-86f2-ea5691ef8f6e",
   "revision": 0,
-  "last_node_id": 213,
-  "last_link_id": 464,
+  "last_node_id": 218,
+  "last_link_id": 470,
   "nodes": [
     {
       "id": 105,
@@ -164,7 +164,7 @@
         "Node name for S&R": "LoadImage"
       },
       "widgets_values": [
-        "ComfyUI_01008_.png",
+        "ComfyUI_01304_.png",
         "image"
       ]
     },
@@ -205,8 +205,8 @@
             455,
             456,
             457,
-            458,
-            459
+            459,
+            465
           ]
         }
       ],
@@ -640,7 +640,7 @@
         "secondTabWidth": 65
       },
       "widgets_values": [
-        898742575918449,
+        429248211203223,
         "randomize"
       ]
     },
@@ -678,8 +678,8 @@
           "type": "IMAGE",
           "slot_index": 0,
           "links": [
-            439,
-            447
+            447,
+            466
           ]
         }
       ],
@@ -694,97 +694,6 @@
         "secondTabText": "Send Back",
         "secondTabOffset": 80,
         "secondTabWidth": 65
-      },
-      "widgets_values": []
-    },
-    {
-      "id": 205,
-      "type": "KleinEditComposite",
-      "pos": [
-        -440,
-        1440
-      ],
-      "size": [
-        310.125,
-        242
-      ],
-      "flags": {},
-      "order": 18,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "original_image",
-          "type": "IMAGE",
-          "link": 458
-        },
-        {
-          "name": "generated_image",
-          "type": "IMAGE",
-          "link": 439
-        }
-      ],
-      "outputs": [
-        {
-          "name": "composited_image",
-          "type": "IMAGE",
-          "links": [
-            440,
-            441,
-            448
-          ]
-        },
-        {
-          "name": "change_mask",
-          "type": "MASK",
-          "links": [
-            442
-          ]
-        },
-        {
-          "name": "report",
-          "type": "STRING",
-          "links": null
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "KleinEditComposite"
-      },
-      "widgets_values": [
-        25.99993896484375,
-        0,
-        30,
-        "medium",
-        15,
-        11,
-        64
-      ]
-    },
-    {
-      "id": 199,
-      "type": "MaskPreview",
-      "pos": [
-        -740,
-        1740
-      ],
-      "size": [
-        660,
-        420
-      ],
-      "flags": {},
-      "order": 22,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "mask",
-          "type": "MASK",
-          "link": 442
-        }
-      ],
-      "outputs": [],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.9.2",
-        "Node name for S&R": "MaskPreview"
       },
       "widgets_values": []
     },
@@ -806,7 +715,7 @@
         {
           "name": "images",
           "type": "IMAGE",
-          "link": 440
+          "link": 467
         }
       ],
       "outputs": [],
@@ -907,42 +816,7 @@
         "ver": "0.9.2",
         "Node name for S&R": "GetImageSize"
       },
-      "widgets_values": [
-        "width: 1376, height: 768\n batch size: 1"
-      ]
-    },
-    {
-      "id": 162,
-      "type": "Text Multiline",
-      "pos": [
-        -1720,
-        1040
-      ],
-      "size": [
-        400,
-        200
-      ],
-      "flags": {},
-      "order": 7,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "STRING",
-          "type": "STRING",
-          "links": [
-            449
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "was-ns",
-        "ver": "afeee09ba44e713ec52a413ac6b105fd06b2d356",
-        "Node name for S&R": "Text Multiline"
-      },
-      "widgets_values": [
-        "he's wearing sunglasses. keep the small bandage on his head."
-      ]
+      "widgets_values": []
     },
     {
       "id": 195,
@@ -969,7 +843,7 @@
           "dir": 3,
           "name": "image_b",
           "type": "IMAGE",
-          "link": 441
+          "link": 468
         }
       ],
       "outputs": [],
@@ -984,14 +858,49 @@
           {
             "name": "A",
             "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_gfjgv_00001_.png&type=temp&subfolder=&rand=0.9133213185080102"
+            "url": "/api/view?filename=rgthree.compare._temp_exqzy_00009_.png&type=temp&subfolder=&rand=0.3078216693666207"
           },
           {
             "name": "B",
             "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_gfjgv_00002_.png&type=temp&subfolder=&rand=0.18632440714917375"
+            "url": "/api/view?filename=rgthree.compare._temp_exqzy_00010_.png&type=temp&subfolder=&rand=0.9854901386594834"
           }
         ]
+      ]
+    },
+    {
+      "id": 211,
+      "type": "PrimitiveFloat",
+      "pos": [
+        -1580,
+        920
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "FLOAT",
+          "type": "FLOAT",
+          "links": [
+            450,
+            464
+          ]
+        }
+      ],
+      "title": "megapixels",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.9.2",
+        "Node name for S&R": "PrimitiveFloat"
+      },
+      "widgets_values": [
+        1
       ]
     },
     {
@@ -1019,7 +928,7 @@
           "dir": 3,
           "name": "image_b",
           "type": "IMAGE",
-          "link": 448
+          "link": 469
         }
       ],
       "outputs": [],
@@ -1034,26 +943,55 @@
           {
             "name": "A",
             "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_zhvlo_00001_.png&type=temp&subfolder=&rand=0.0478727004361994"
+            "url": "/api/view?filename=rgthree.compare._temp_ollrm_00009_.png&type=temp&subfolder=&rand=0.30641703263544795"
           },
           {
             "name": "B",
             "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_zhvlo_00002_.png&type=temp&subfolder=&rand=0.022658610435919657"
+            "url": "/api/view?filename=rgthree.compare._temp_ollrm_00010_.png&type=temp&subfolder=&rand=0.4566699425914934"
           }
         ]
       ]
     },
     {
-      "id": 211,
-      "type": "PrimitiveFloat",
+      "id": 199,
+      "type": "MaskPreview",
       "pos": [
-        -1580,
-        920
+        -660,
+        1860
       ],
       "size": [
-        270,
-        58
+        660,
+        420
+      ],
+      "flags": {},
+      "order": 22,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": 470
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.9.2",
+        "Node name for S&R": "MaskPreview"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 162,
+      "type": "Text Multiline",
+      "pos": [
+        -1720,
+        1040
+      ],
+      "size": [
+        400,
+        200
       ],
       "flags": {},
       "order": 8,
@@ -1061,21 +999,83 @@
       "inputs": [],
       "outputs": [
         {
-          "name": "FLOAT",
-          "type": "FLOAT",
+          "name": "STRING",
+          "type": "STRING",
           "links": [
-            450,
-            464
+            449
           ]
         }
       ],
-      "title": "megapixels",
       "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.9.2",
-        "Node name for S&R": "PrimitiveFloat"
+        "cnr_id": "was-ns",
+        "ver": "afeee09ba44e713ec52a413ac6b105fd06b2d356",
+        "Node name for S&R": "Text Multiline"
       },
       "widgets_values": [
+        "he has a huge mustache"
+      ]
+    },
+    {
+      "id": 214,
+      "type": "KleinEditComposite",
+      "pos": [
+        -460,
+        1480
+      ],
+      "size": [
+        310.125,
+        266
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "original_image",
+          "type": "IMAGE",
+          "link": 465
+        },
+        {
+          "name": "generated_image",
+          "type": "IMAGE",
+          "link": 466
+        }
+      ],
+      "outputs": [
+        {
+          "name": "composited_image",
+          "type": "IMAGE",
+          "links": [
+            467,
+            468,
+            469
+          ]
+        },
+        {
+          "name": "change_mask",
+          "type": "MASK",
+          "links": [
+            470
+          ]
+        },
+        {
+          "name": "report",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "aux_id": "supermansundies/comfyui-klein-edit-composite",
+        "ver": "e8d48b6632b39a1fe79bf85eea107ea309ec8cb3",
+        "Node name for S&R": "KleinEditComposite"
+      },
+      "widgets_values": [
+        -1,
+        -0.1,
+        1.6,
+        "medium",
+        -1,
+        1,
         1
       ]
     }
@@ -1178,51 +1178,11 @@
       "LATENT"
     ],
     [
-      439,
-      101,
-      0,
-      205,
-      1,
-      "IMAGE"
-    ],
-    [
-      440,
-      205,
-      0,
-      194,
-      0,
-      "IMAGE"
-    ],
-    [
-      441,
-      205,
-      0,
-      195,
-      1,
-      "IMAGE"
-    ],
-    [
-      442,
-      205,
-      1,
-      199,
-      0,
-      "MASK"
-    ],
-    [
       447,
       101,
       0,
       209,
       0,
-      "IMAGE"
-    ],
-    [
-      448,
-      205,
-      0,
-      209,
-      1,
       "IMAGE"
     ],
     [
@@ -1290,14 +1250,6 @@
       "IMAGE"
     ],
     [
-      458,
-      212,
-      0,
-      205,
-      0,
-      "IMAGE"
-    ],
-    [
       459,
       212,
       0,
@@ -1328,16 +1280,64 @@
       212,
       1,
       "FLOAT"
+    ],
+    [
+      465,
+      212,
+      0,
+      214,
+      0,
+      "IMAGE"
+    ],
+    [
+      466,
+      101,
+      0,
+      214,
+      1,
+      "IMAGE"
+    ],
+    [
+      467,
+      214,
+      0,
+      194,
+      0,
+      "IMAGE"
+    ],
+    [
+      468,
+      214,
+      0,
+      195,
+      1,
+      "IMAGE"
+    ],
+    [
+      469,
+      214,
+      0,
+      209,
+      1,
+      "IMAGE"
+    ],
+    [
+      470,
+      214,
+      1,
+      199,
+      0,
+      "MASK"
     ]
   ],
   "groups": [],
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.9229599817706869,
+      "scale": 0.8390545288824254,
       "offset": [
-        2182.0746783684035,
-        -552.6243121996083
+        1941.653643150988,
+        -567.956248564538
       ]
     },
     "frontendVersion": "1.36.14",

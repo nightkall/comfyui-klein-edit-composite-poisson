@@ -9,3 +9,4 @@ venv/
 .venv/
 *.egg
 .DS_Store
+README.md
