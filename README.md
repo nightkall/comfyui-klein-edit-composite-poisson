@@ -2,7 +2,10 @@
 
 A ComfyUI custom node that composites a Klein edit back onto the original image using DIS optical flow change detection. Eliminates color drift by restoring original pixels everywhere Klein didn't intentionally change anything.
 
+<img width="373" height="386" alt="image" src="https://github.com/user-attachments/assets/4408f891-8b30-4e70-8587-9fa000322aac" />
+
 Series of edits without the node:
+
 ![nonode](https://github.com/user-attachments/assets/4287b4a8-f58b-4b08-9e80-a41c5b165cd7)
 
 Series of edits with the node:
@@ -16,9 +19,14 @@ A global rigid alignment step calculates a single camera-shift correction from u
 Several refinements prevent false positives:
 
 -A pre-blur step absorbs sub-pixel misalignment halos
+
 -Luma weighting reduces sensitivity to AI-induced global contrast shifts
+
 -Smoothing of the difference map before thresholding eliminates speckle noise
+
 -Morphological closing fills holes in the change mask
+
 -Small isolated blobs are removed automatically
 
-NOTE: AI coded. I am not a developer.
+
+## NOTE: AI coded. I am not a developer.
