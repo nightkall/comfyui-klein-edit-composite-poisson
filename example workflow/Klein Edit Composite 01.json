@@ -2,7 +2,7 @@
   "id": "92112d97-bb64-4b44-86f2-ea5691ef8f6e",
   "revision": 0,
   "last_node_id": 213,
-  "last_link_id": 463,
+  "last_link_id": 464,
   "nodes": [
     {
       "id": 105,
@@ -130,40 +130,6 @@
       ]
     },
     {
-      "id": 211,
-      "type": "PrimitiveFloat",
-      "pos": [
-        -1580,
-        920
-      ],
-      "size": [
-        270,
-        58
-      ],
-      "flags": {},
-      "order": 3,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "FLOAT",
-          "type": "FLOAT",
-          "links": [
-            450
-          ]
-        }
-      ],
-      "title": "megapixels",
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.9.2",
-        "Node name for S&R": "PrimitiveFloat"
-      },
-      "widgets_values": [
-        0
-      ]
-    },
-    {
       "id": 148,
       "type": "LoadImage",
       "pos": [
@@ -175,7 +141,7 @@
         360
       ],
       "flags": {},
-      "order": 4,
+      "order": 3,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -214,13 +180,21 @@
         106
       ],
       "flags": {},
-      "order": 9,
+      "order": 10,
       "mode": 0,
       "inputs": [
         {
           "name": "image",
           "type": "IMAGE",
           "link": 453
+        },
+        {
+          "name": "megapixels",
+          "type": "FLOAT",
+          "widget": {
+            "name": "megapixels"
+          },
+          "link": 464
         }
       ],
       "outputs": [
@@ -259,7 +233,7 @@
         106
       ],
       "flags": {},
-      "order": 10,
+      "order": 9,
       "mode": 4,
       "inputs": [
         {
@@ -310,7 +284,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 13,
+      "order": 11,
       "mode": 0,
       "inputs": [
         {
@@ -385,7 +359,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 11,
+      "order": 12,
       "mode": 0,
       "inputs": [
         {
@@ -427,7 +401,7 @@
         58
       ],
       "flags": {},
-      "order": 5,
+      "order": 4,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -467,7 +441,7 @@
         106
       ],
       "flags": {},
-      "order": 14,
+      "order": 15,
       "mode": 0,
       "inputs": [
         {
@@ -528,7 +502,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 15,
+      "order": 14,
       "mode": 0,
       "inputs": [
         {
@@ -641,7 +615,7 @@
         82
       ],
       "flags": {},
-      "order": 6,
+      "order": 5,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -666,7 +640,7 @@
         "secondTabWidth": 65
       },
       "widgets_values": [
-        1122698873835597,
+        898742575918449,
         "randomize"
       ]
     },
@@ -857,7 +831,7 @@
         360
       ],
       "flags": {},
-      "order": 7,
+      "order": 6,
       "mode": 4,
       "inputs": [],
       "outputs": [
@@ -898,7 +872,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 12,
+      "order": 13,
       "mode": 0,
       "inputs": [
         {
@@ -949,7 +923,7 @@
         200
       ],
       "flags": {},
-      "order": 8,
+      "order": 7,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1010,12 +984,12 @@
           {
             "name": "A",
             "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_ipdlm_00021_.png&type=temp&subfolder=&rand=0.7834131478871827"
+            "url": "/api/view?filename=rgthree.compare._temp_gfjgv_00001_.png&type=temp&subfolder=&rand=0.9133213185080102"
           },
           {
             "name": "B",
             "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_ipdlm_00022_.png&type=temp&subfolder=&rand=0.6975356914479076"
+            "url": "/api/view?filename=rgthree.compare._temp_gfjgv_00002_.png&type=temp&subfolder=&rand=0.18632440714917375"
           }
         ]
       ]
@@ -1060,14 +1034,49 @@
           {
             "name": "A",
             "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_vyupj_00021_.png&type=temp&subfolder=&rand=0.9999874586976318"
+            "url": "/api/view?filename=rgthree.compare._temp_zhvlo_00001_.png&type=temp&subfolder=&rand=0.0478727004361994"
           },
           {
             "name": "B",
             "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_vyupj_00022_.png&type=temp&subfolder=&rand=0.543759494005484"
+            "url": "/api/view?filename=rgthree.compare._temp_zhvlo_00002_.png&type=temp&subfolder=&rand=0.022658610435919657"
           }
         ]
+      ]
+    },
+    {
+      "id": 211,
+      "type": "PrimitiveFloat",
+      "pos": [
+        -1580,
+        920
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "FLOAT",
+          "type": "FLOAT",
+          "links": [
+            450,
+            464
+          ]
+        }
+      ],
+      "title": "megapixels",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.9.2",
+        "Node name for S&R": "PrimitiveFloat"
+      },
+      "widgets_values": [
+        1
       ]
     }
   ],
@@ -1311,16 +1320,24 @@
       109,
       1,
       "INT"
+    ],
+    [
+      464,
+      211,
+      0,
+      212,
+      1,
+      "FLOAT"
     ]
   ],
   "groups": [],
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.5209868481924623,
+      "scale": 0.9229599817706869,
       "offset": [
-        2093.9253539993147,
-        -289.7698310121238
+        2182.0746783684035,
+        -552.6243121996083
       ]
     },
     "frontendVersion": "1.36.14",
