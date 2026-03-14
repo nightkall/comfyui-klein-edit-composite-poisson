@@ -307,6 +307,45 @@ def _grow_mask(mask: np.ndarray, grow_px: int) -> np.ndarray:
     return cv2.morphologyEx(mask.astype(np.uint8), op, k).astype(np.float32)
 
 
+def _open_mask(mask: np.ndarray, radius_px: int) -> np.ndarray:
+    """Morphological opening (erode then re-dilate) to destroy small noise blobs.
+
+    Any connected region whose radius is smaller than *radius_px* will be
+    removed.  Larger regions are restored to approximately their original size
+    by the subsequent re-dilation, so real edges are largely preserved.
+    """
+    if radius_px <= 0:
+        return mask
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius_px * 2 + 1, radius_px * 2 + 1))
+    eroded  = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_ERODE,  k)
+    reopened = cv2.morphologyEx(eroded,               cv2.MORPH_DILATE, k)
+    return reopened.astype(np.float32)
+
+
+def _fill_holes(mask: np.ndarray) -> np.ndarray:
+    """Fill holes enclosed within each connected white island independently.
+
+    Each white island is processed separately: a hole is only filled if it is
+    fully enclosed by *that island alone*.  This prevents gaps that connect to
+    the image exterior (e.g. ladder rungs open to the background) from being
+    flooded, while still filling genuine interior voids.
+    """
+    binary = (mask > 0.5).astype(np.uint8)
+    h, w = binary.shape
+    n, labeled = cv2.connectedComponents(binary, connectivity=8)
+    result = binary.copy()
+    for island_id in range(1, n):
+        # Isolate this island in a zero-padded canvas (exterior = 0)
+        island = (labeled == island_id).astype(np.uint8)
+        padded = np.zeros((h + 2, w + 2), dtype=np.uint8)
+        padded[1:h+1, 1:w+1] = island
+        inv = 1 - padded
+        cv2.floodFill(inv, None, (0, 0), 0)   # erase exterior background
+        interior = inv[1:h+1, 1:w+1]          # what remains = enclosed holes
+        result = np.clip(result + interior, 0, 1).astype(np.uint8)
+    return result.astype(np.float32)
+
+
 # ---------------------------------------------------------------------------
 # Auto-tuning
 # ---------------------------------------------------------------------------
@@ -345,8 +384,11 @@ def _composite(original_np: np.ndarray,
                occlusion_threshold: float,
                grow_px: int,
                close_radius: int,
-               min_region_px: int,
                feather_px: float,
+               noise_removal_px: int = 0,
+               max_islands: int = 0,
+               fill_holes: bool = False,
+               use_occlusion: bool = False,
                custom_mask: np.ndarray = None,
                debug: bool = False) -> tuple:
 
@@ -409,23 +451,27 @@ def _composite(original_np: np.ndarray,
             cv2.cvtColor((np.clip(gen_pre, 0, 1) * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY),
             flow_preset,
         )
-        flow_bwd_final = _dis_flow(
-            cv2.cvtColor((np.clip(gen_pre, 0, 1) * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY),
-            gray_orig,
-            flow_preset,
-        )
-        occ_thresh = (
-            occlusion_threshold if occlusion_threshold >= 0
-            else _auto_occlusion_threshold(flow_fwd_final, flow_bwd_final)
-        )
-        if occlusion_threshold < 0:
-            auto_report['auto_occlusion'] = occ_thresh
+        if use_occlusion:
+            flow_bwd_final = _dis_flow(
+                cv2.cvtColor((np.clip(gen_pre, 0, 1) * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY),
+                gray_orig,
+                flow_preset,
+            )
+            occ_thresh = (
+                occlusion_threshold if occlusion_threshold >= 0
+                else _auto_occlusion_threshold(flow_fwd_final, flow_bwd_final)
+            )
+            if occlusion_threshold < 0:
+                auto_report['auto_occlusion'] = occ_thresh
+        else:
+            flow_bwd_final = None
+            occ_thresh     = 0
 
         flow_mag  = np.sqrt((flow_fwd_final**2).sum(axis=2))
         n_changed = int((sharp_mask > 0.5).sum())
         stats = {
             "changed_pct":    100 * n_changed / (H * W),
-            "occluded_px":    int((_fwd_bwd_error(flow_fwd_final, flow_bwd_final) > occ_thresh).sum()),
+            "occluded_px":    int((_fwd_bwd_error(flow_fwd_final, flow_bwd_final) > occ_thresh).sum()) if use_occlusion else 0,
             "flow_mean_px":   float(flow_mag.mean()),
             "flow_p99_px":    float(np.percentile(flow_mag, 99)),
             "median_de":      float(np.median(np.zeros((H, W)))),  # N/A in override mode
@@ -469,7 +515,7 @@ def _composite(original_np: np.ndarray,
         (np.clip(gen_pre_1, 0, 1) * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY
     )
     flow_fwd_1 = _dis_flow(gray_orig, gray_gen_pre_1, flow_preset)
-    flow_bwd_1 = _dis_flow(gray_gen_pre_1, gray_orig, flow_preset)
+    flow_bwd_1 = _dis_flow(gray_gen_pre_1, gray_orig, flow_preset) if use_occlusion else None
 
     warped_gen_1 = _warp(gen_pre_1, flow_fwd_1)
     wgen_lab_1   = _rgb_to_lab(
@@ -478,15 +524,27 @@ def _composite(original_np: np.ndarray,
 
     lab_diff_1 = orig_lab - wgen_lab_1
     lab_diff_1[..., 0] *= 0.7
-    delta_e_1  = cv2.GaussianBlur(np.sqrt((lab_diff_1**2).sum(axis=2)), (sk, sk), 0)
+    delta_e_1_warped = cv2.GaussianBlur(np.sqrt((lab_diff_1**2).sum(axis=2)), (sk, sk), 0)
 
-    de_thresh  = delta_e_threshold  if delta_e_threshold  >= 0 else _auto_delta_e_threshold(delta_e_1)
-    occ_thresh = occlusion_threshold if occlusion_threshold >= 0 else _auto_occlusion_threshold(flow_fwd_1, flow_bwd_1)
+    # Direct (unwarped) comparison — immune to warp-induced holes inside edit regions.
+    gen_lab_1_direct = _rgb_to_lab(
+        cv2.GaussianBlur(gen_pre_1, blur_kernel, 0).reshape(-1, 3)
+    ).reshape(H, W, 3)
+    lab_diff_1_direct = orig_lab - gen_lab_1_direct
+    lab_diff_1_direct[..., 0] *= 0.7
+    delta_e_1_direct = cv2.GaussianBlur(np.sqrt((lab_diff_1_direct**2).sum(axis=2)), (sk, sk), 0)
 
-    coarse_mask = np.maximum(
-        (delta_e_1 > de_thresh).astype(np.float32),
-        _occlusion_mask(flow_fwd_1, flow_bwd_1, occ_thresh),
-    )
+    # Blend: direct leads where the direct signal is already strong (edit regions);
+    # warped leads in the background (better at suppressing camera-shake noise).
+    de_thresh  = delta_e_threshold if delta_e_threshold >= 0 else _auto_delta_e_threshold(delta_e_1_direct)
+    if use_occlusion:
+        occ_thresh = occlusion_threshold if occlusion_threshold >= 0 else _auto_occlusion_threshold(flow_fwd_1, flow_bwd_1)
+    blend_w_1  = np.clip(delta_e_1_direct / (de_thresh + 1e-6), 0.0, 1.0)
+    delta_e_1  = blend_w_1 * delta_e_1_direct + (1.0 - blend_w_1) * delta_e_1_warped
+
+    coarse_mask = (delta_e_1 > de_thresh).astype(np.float32)
+    if use_occlusion:
+        coarse_mask = np.maximum(coarse_mask, _occlusion_mask(flow_fwd_1, flow_bwd_1, occ_thresh))
     coarse_mask *= valid_1
 
     if debug:
@@ -535,7 +593,7 @@ def _composite(original_np: np.ndarray,
         (np.clip(final_aligned_gen, 0, 1) * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY
     )
     flow_fwd_2 = _dis_flow(gray_orig, gray_gen_pre_2, flow_preset)
-    flow_bwd_2 = _dis_flow(gray_gen_pre_2, gray_orig, flow_preset)
+    flow_bwd_2 = _dis_flow(gray_gen_pre_2, gray_orig, flow_preset) if use_occlusion else None
 
     warped_gen_final = _warp(final_aligned_gen, flow_fwd_2)
     wgen_lab_2       = _rgb_to_lab(
@@ -544,31 +602,52 @@ def _composite(original_np: np.ndarray,
 
     lab_diff_2 = orig_lab - wgen_lab_2
     lab_diff_2[..., 0] *= 0.7
-    delta_e_2  = cv2.GaussianBlur(np.sqrt((lab_diff_2**2).sum(axis=2)), (sk, sk), 0)
+    delta_e_2_warped = cv2.GaussianBlur(np.sqrt((lab_diff_2**2).sum(axis=2)), (sk, sk), 0)
 
-    sharp_mask = np.maximum(
-        (delta_e_2 > de_thresh).astype(np.float32),
-        _occlusion_mask(flow_fwd_2, flow_bwd_2, occ_thresh),
-    )
+    # Direct (unwarped) comparison — immune to warp-induced holes inside edit regions.
+    gen_lab_2_direct = _rgb_to_lab(
+        cv2.GaussianBlur(final_aligned_gen, blur_kernel, 0).reshape(-1, 3)
+    ).reshape(H, W, 3)
+    lab_diff_2_direct = orig_lab - gen_lab_2_direct
+    lab_diff_2_direct[..., 0] *= 0.7
+    delta_e_2_direct = cv2.GaussianBlur(np.sqrt((lab_diff_2_direct**2).sum(axis=2)), (sk, sk), 0)
+
+    # Blend: direct leads where the direct signal is already strong (edit regions);
+    # warped leads in the background (better at suppressing camera-shake noise).
+    blend_w_2  = np.clip(delta_e_2_direct / (de_thresh + 1e-6), 0.0, 1.0)
+    delta_e_2  = blend_w_2 * delta_e_2_direct + (1.0 - blend_w_2) * delta_e_2_warped
+
+    sharp_mask = (delta_e_2 > de_thresh).astype(np.float32)
+    if use_occlusion:
+        sharp_mask = np.maximum(sharp_mask, _occlusion_mask(flow_fwd_2, flow_bwd_2, occ_thresh))
     sharp_mask *= valid_2
 
     if delta_e_threshold  < 0: auto_report["auto_delta_e"]   = de_thresh
-    if occlusion_threshold < 0: auto_report["auto_occlusion"] = occ_thresh
+    if use_occlusion and occlusion_threshold < 0: auto_report["auto_occlusion"] = occ_thresh
 
     # Morphology
+    if noise_removal_px > 0:
+        sharp_mask = _open_mask(sharp_mask, noise_removal_px)
+        sharp_mask *= valid_2
     if grow_px != 0:
         sharp_mask = _grow_mask(sharp_mask, grow_px)
         sharp_mask *= valid_2
     if close_radius > 0:
         k          = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_radius * 2 + 1, close_radius * 2 + 1))
         sharp_mask = cv2.morphologyEx(sharp_mask.astype(np.uint8), cv2.MORPH_CLOSE, k).astype(np.float32)
-    if min_region_px > 0:
+    if max_islands > 0:
         n, labeled, stats_cc, _ = cv2.connectedComponentsWithStats(
             (sharp_mask > 0.5).astype(np.uint8), connectivity=8
         )
-        for i in range(1, n):
-            if stats_cc[i, cv2.CC_STAT_AREA] < min_region_px:
-                sharp_mask[labeled == i] = 0
+        if n - 1 > max_islands:  # n includes background label 0
+            areas = [(stats_cc[i, cv2.CC_STAT_AREA], i) for i in range(1, n)]
+            areas.sort(reverse=True)
+            keep = {i for _, i in areas[:max_islands]}
+            sharp_mask[np.isin(labeled, list(keep), invert=True) & (labeled > 0)] = 0
+
+    if fill_holes:
+        sharp_mask = _fill_holes(sharp_mask)
+        sharp_mask *= valid_2
 
     # Feathered mask for compositing
     if feather_px > 0:
@@ -594,7 +673,7 @@ def _composite(original_np: np.ndarray,
     n_changed = int((sharp_mask > 0.5).sum())
     stats = {
         "changed_pct":    100 * n_changed / (H * W),
-        "occluded_px":    int((_fwd_bwd_error(flow_fwd_2, flow_bwd_2) > occ_thresh).sum()),
+        "occluded_px":    int((_fwd_bwd_error(flow_fwd_2, flow_bwd_2) > occ_thresh).sum()) if use_occlusion else 0,
         "flow_mean_px":   float(flow_mag.mean()),
         "flow_p99_px":    float(np.percentile(flow_mag, 99)),
         "median_de":      float(np.median(delta_e_2)),
@@ -652,28 +731,58 @@ class KleinEditComposite:
             "required": {
                 "original_image":  ("IMAGE",),
                 "generated_image": ("IMAGE",),
+                # --- Detection ---
                 "delta_e_threshold": ("FLOAT", {
                     "default": -1.0, "min": -1.0, "max": 100.0, "step": 1.0,
                     "tooltip": "Set to -1 for automatic tuning.",
                 }),
-                "grow_mask_pct": ("FLOAT", {
-                    "default": 0.0, "min": -3.0, "max": 3.0, "step": 0.1,
-                }),
-                "feather_pct": ("FLOAT", {
-                    "default": 2.0, "min": 0.0, "max": 10.0, "step": 0.25,
-                }),
                 "flow_quality": (["medium", "fast", "ultrafast"], {
                     "default": "medium",
                 }),
+                "use_occlusion": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "Add occlusion detection to the change mask. "
+                        "Useful for camera-motion edits but causes bleed on heavy color edits. "
+                        "Disabled by default."
+                    ),
+                }),
                 "occlusion_threshold": ("FLOAT", {
                     "default": -1.0, "min": -1.0, "max": 50.0, "step": 0.5,
+                    "tooltip": "Only used when use_occlusion is enabled. -1 = auto.",
+                }),
+                # --- Mask cleanup ---
+                "noise_removal_pct": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 3.0, "step": 0.05,
+                    "tooltip": (
+                        "Morphological opening radius as % of image diagonal. "
+                        "Erodes then re-dilates the raw mask to destroy speckle noise "
+                        "smaller than this radius. 0 = disabled."
+                    ),
                 }),
                 "close_radius_pct": ("FLOAT", {
                     "default": 0.5, "min": 0.0, "max": 5.0, "step": 0.1,
                 }),
-                "min_region_pct": ("FLOAT", {
-                    "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01,
-                    "tooltip": "Remove isolated changed regions smaller than this % of total pixels.",
+                "fill_holes": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "Flood-fill enclosed interior holes in the mask. "
+                        "Only fills regions fully surrounded by mask; outer boundary is unchanged."
+                    ),
+                }),
+                "max_islands": ("INT", {
+                    "default": 0, "min": 0, "max": 32, "step": 1,
+                    "tooltip": (
+                        "Keep only the N largest connected regions in the mask, discard the rest. "
+                        "0 = disabled (keep all)."
+                    ),
+                }),
+                "grow_mask_pct": ("FLOAT", {
+                    "default": 0.0, "min": -3.0, "max": 3.0, "step": 0.1,
+                }),
+                # --- Output ---
+                "feather_pct": ("FLOAT", {
+                    "default": 2.0, "min": 0.0, "max": 10.0, "step": 0.25,
                 }),
                 "enable_debug": ("BOOLEAN", {
                     "default": False,
@@ -700,8 +809,8 @@ class KleinEditComposite:
     def run(self, original_image, generated_image,
             delta_e_threshold=-1.0, grow_mask_pct=0.0, feather_pct=2.0,
             flow_quality="medium", occlusion_threshold=-1.0,
-            close_radius_pct=0.5, min_region_pct=0.05, enable_debug=False,
-            custom_mask=None):
+            close_radius_pct=0.5, noise_removal_pct=0.0, max_islands=0,
+            fill_holes=False, use_occlusion=False, enable_debug=False, custom_mask=None):
 
         orig_np = original_image[0].cpu().float().numpy()
         gen_np  = generated_image[0].cpu().float().numpy()
@@ -713,12 +822,11 @@ class KleinEditComposite:
 
         H, W       = gen_np.shape[:2]
         diag       = _diag(H, W)
-        total_area = H * W
 
-        grow_px    = round(grow_mask_pct * diag / 100.0)
-        feather_px = abs(feather_pct) * diag / 100.0
-        close_px   = _pct_to_px(close_radius_pct, diag)
-        min_px     = max(0, round(min_region_pct * total_area / 100.0))
+        grow_px          = round(grow_mask_pct * diag / 100.0)
+        feather_px       = abs(feather_pct) * diag / 100.0
+        close_px         = _pct_to_px(close_radius_pct, diag)
+        noise_removal_px = _pct_to_px(noise_removal_pct, diag)
 
         # Unpack optional custom mask (ComfyUI passes MASK as [B, H, W])
         custom_mask_np = None
@@ -735,7 +843,10 @@ class KleinEditComposite:
             occlusion_threshold = occlusion_threshold,
             grow_px             = grow_px,
             close_radius        = close_px,
-            min_region_px       = min_px,
+            noise_removal_px    = noise_removal_px,
+            max_islands         = max_islands,
+            fill_holes          = fill_holes,
+            use_occlusion       = use_occlusion,
             feather_px          = feather_px,
             custom_mask         = custom_mask_np,
             debug               = enable_debug,
@@ -786,6 +897,10 @@ class KleinEditComposite:
 
         report_lines += [
             f"Grow mask:        {grow_mask_pct:+.1f}% → {grow_px:+d}px",
+            f"Noise removal:    {noise_removal_pct:.2f}% → {noise_removal_px}px (opening radius)",
+            f"Max islands:      {max_islands if max_islands > 0 else 'disabled'}",
+            f"Fill holes:       {'yes' if fill_holes else 'no'}",
+            f"Occlusion:        {'enabled' if use_occlusion else 'disabled'}",
             f"Feather:          {feather_pct:.1f}% → {feather_px:.0f}px",
             f"Flow quality:     {flow_quality}",
             "",
