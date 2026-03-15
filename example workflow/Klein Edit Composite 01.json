@@ -1,8 +1,8 @@
 {
   "id": "92112d97-bb64-4b44-86f2-ea5691ef8f6e",
   "revision": 0,
-  "last_node_id": 225,
-  "last_link_id": 489,
+  "last_node_id": 232,
+  "last_link_id": 530,
   "nodes": [
     {
       "id": 105,
@@ -167,7 +167,7 @@
             456,
             457,
             459,
-            488
+            523
           ]
         }
       ],
@@ -550,7 +550,7 @@
           "slot_index": 0,
           "links": [
             447,
-            489
+            524
           ]
         }
       ],
@@ -567,37 +567,6 @@
         "secondTabWidth": 65
       },
       "widgets_values": []
-    },
-    {
-      "id": 194,
-      "type": "SaveImage",
-      "pos": [
-        60,
-        2020
-      ],
-      "size": [
-        460.54754483416923,
-        332.3219230694747
-      ],
-      "flags": {},
-      "order": 20,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "images",
-          "type": "IMAGE",
-          "link": 482
-        }
-      ],
-      "outputs": [],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.9.2",
-        "Node name for S&R": "SaveImage"
-      },
-      "widgets_values": [
-        "ComfyUI"
-      ]
     },
     {
       "id": 213,
@@ -649,57 +618,7 @@
         "Node name for S&R": "GetImageSize"
       },
       "widgets_values": [
-        "width: 1360, height: 768\n batch size: 1"
-      ]
-    },
-    {
-      "id": 195,
-      "type": "Image Comparer (rgthree)",
-      "pos": [
-        60,
-        1080
-      ],
-      "size": [
-        680,
-        400
-      ],
-      "flags": {},
-      "order": 21,
-      "mode": 0,
-      "inputs": [
-        {
-          "dir": 3,
-          "name": "image_a",
-          "type": "IMAGE",
-          "link": 457
-        },
-        {
-          "dir": 3,
-          "name": "image_b",
-          "type": "IMAGE",
-          "link": 483
-        }
-      ],
-      "outputs": [],
-      "title": "Compare Edit",
-      "properties": {
-        "cnr_id": "rgthree-comfy",
-        "ver": "42e73c3c48e8268129a6a1ea6d9766913bfc5435",
-        "comparer_mode": "Slide"
-      },
-      "widgets_values": [
-        [
-          {
-            "name": "A",
-            "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_lekun_00009_.png&type=temp&subfolder=&rand=0.27868234759916743"
-          },
-          {
-            "name": "B",
-            "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_lekun_00010_.png&type=temp&subfolder=&rand=0.9443903824436136"
-          }
-        ]
+        "width: 880, height: 1184\n batch size: 1"
       ]
     },
     {
@@ -720,7 +639,7 @@
         {
           "name": "mask",
           "type": "MASK",
-          "link": 485
+          "link": 528
         }
       ],
       "outputs": [],
@@ -753,39 +672,6 @@
       ],
       "color": "#432",
       "bgcolor": "#653"
-    },
-    {
-      "id": 220,
-      "type": "PreviewAny",
-      "pos": [
-        60,
-        2880
-      ],
-      "size": [
-        440,
-        320
-      ],
-      "flags": {},
-      "order": 24,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "source",
-          "type": "*",
-          "link": 486
-        }
-      ],
-      "outputs": [],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.9.2",
-        "Node name for S&R": "PreviewAny"
-      },
-      "widgets_values": [
-        null,
-        null,
-        null
-      ]
     },
     {
       "id": 148,
@@ -823,58 +709,8 @@
         "image": "clipspace/clipspace-painted-masked-1773516433234.png [input]"
       },
       "widgets_values": [
-        "Back to the Future (1985).mkv_snapshot_00.54.29.262.jpg",
+        "ComfyUI_07276_.png",
         "image"
-      ]
-    },
-    {
-      "id": 209,
-      "type": "Image Comparer (rgthree)",
-      "pos": [
-        60,
-        1540
-      ],
-      "size": [
-        680,
-        400
-      ],
-      "flags": {},
-      "order": 22,
-      "mode": 0,
-      "inputs": [
-        {
-          "dir": 3,
-          "name": "image_a",
-          "type": "IMAGE",
-          "link": 447
-        },
-        {
-          "dir": 3,
-          "name": "image_b",
-          "type": "IMAGE",
-          "link": 484
-        }
-      ],
-      "outputs": [],
-      "title": "Compare Color Shift",
-      "properties": {
-        "cnr_id": "rgthree-comfy",
-        "ver": "42e73c3c48e8268129a6a1ea6d9766913bfc5435",
-        "comparer_mode": "Slide"
-      },
-      "widgets_values": [
-        [
-          {
-            "name": "A",
-            "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_dcyja_00009_.png&type=temp&subfolder=&rand=0.18919833213880943"
-          },
-          {
-            "name": "B",
-            "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_dcyja_00010_.png&type=temp&subfolder=&rand=0.8135124583145371"
-          }
-        ]
       ]
     },
     {
@@ -1001,65 +837,167 @@
       ]
     },
     {
-      "id": 219,
-      "type": "PreviewImage",
+      "id": 209,
+      "type": "Image Comparer (rgthree)",
       "pos": [
-        60,
-        2420
+        100,
+        1540
       ],
       "size": [
-        620,
+        680,
         400
       ],
       "flags": {},
-      "order": 25,
+      "order": 22,
       "mode": 0,
       "inputs": [
         {
-          "name": "images",
+          "dir": 3,
+          "name": "image_a",
           "type": "IMAGE",
-          "link": 487
+          "link": 447
+        },
+        {
+          "dir": 3,
+          "name": "image_b",
+          "type": "IMAGE",
+          "link": 527
+        }
+      ],
+      "outputs": [],
+      "title": "Compare Color Shift",
+      "properties": {
+        "cnr_id": "rgthree-comfy",
+        "ver": "42e73c3c48e8268129a6a1ea6d9766913bfc5435",
+        "comparer_mode": "Slide"
+      },
+      "widgets_values": [
+        [
+          {
+            "name": "A",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_ggoen_00041_.png&type=temp&subfolder=&rand=0.002913681112567623"
+          },
+          {
+            "name": "B",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_ggoen_00042_.png&type=temp&subfolder=&rand=0.32234470851122465"
+          }
+        ]
+      ]
+    },
+    {
+      "id": 220,
+      "type": "PreviewAny",
+      "pos": [
+        100,
+        2400
+      ],
+      "size": [
+        440,
+        320
+      ],
+      "flags": {},
+      "order": 24,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 529
         }
       ],
       "outputs": [],
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.9.2",
-        "Node name for S&R": "PreviewImage"
-      },
-      "widgets_values": []
-    },
-    {
-      "id": 162,
-      "type": "Text Multiline",
-      "pos": [
-        -1720,
-        1040
-      ],
-      "size": [
-        400,
-        200
-      ],
-      "flags": {},
-      "order": 8,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "STRING",
-          "type": "STRING",
-          "links": [
-            449
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "was-ns",
-        "ver": "afeee09ba44e713ec52a413ac6b105fd06b2d356",
-        "Node name for S&R": "Text Multiline"
+        "Node name for S&R": "PreviewAny"
       },
       "widgets_values": [
-        "remove the blue paper"
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "id": 194,
+      "type": "SaveImage",
+      "pos": [
+        100,
+        2000
+      ],
+      "size": [
+        460.54754483416923,
+        332.3219230694747
+      ],
+      "flags": {},
+      "order": 20,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 525
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.9.2",
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "ComfyUI"
+      ]
+    },
+    {
+      "id": 195,
+      "type": "Image Comparer (rgthree)",
+      "pos": [
+        100,
+        1080
+      ],
+      "size": [
+        680,
+        400
+      ],
+      "flags": {},
+      "order": 21,
+      "mode": 0,
+      "inputs": [
+        {
+          "dir": 3,
+          "name": "image_a",
+          "type": "IMAGE",
+          "link": 457
+        },
+        {
+          "dir": 3,
+          "name": "image_b",
+          "type": "IMAGE",
+          "link": 526
+        }
+      ],
+      "outputs": [],
+      "title": "Compare Edit",
+      "properties": {
+        "cnr_id": "rgthree-comfy",
+        "ver": "42e73c3c48e8268129a6a1ea6d9766913bfc5435",
+        "comparer_mode": "Slide"
+      },
+      "widgets_values": [
+        [
+          {
+            "name": "A",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_nnfbv_00041_.png&type=temp&subfolder=&rand=0.49065296128700997"
+          },
+          {
+            "name": "B",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_nnfbv_00042_.png&type=temp&subfolder=&rand=0.6246522027557322"
+          }
+        ]
       ]
     },
     {
@@ -1074,7 +1012,7 @@
         82
       ],
       "flags": {},
-      "order": 9,
+      "order": 8,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1099,20 +1037,82 @@
         "secondTabWidth": 65
       },
       "widgets_values": [
-        921745540268736,
+        760337408260183,
         "randomize"
       ]
     },
     {
-      "id": 225,
+      "id": 219,
+      "type": "PreviewImage",
+      "pos": [
+        -900,
+        2340
+      ],
+      "size": [
+        920,
+        400
+      ],
+      "flags": {},
+      "order": 25,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 530
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.9.2",
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 162,
+      "type": "Text Multiline",
+      "pos": [
+        -1720,
+        1080
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            449
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "was-ns",
+        "ver": "afeee09ba44e713ec52a413ac6b105fd06b2d356",
+        "Node name for S&R": "Text Multiline"
+      },
+      "widgets_values": [
+        "she's wearing riot gear"
+      ]
+    },
+    {
+      "id": 231,
       "type": "KleinEditComposite",
       "pos": [
-        -420,
-        1420
+        -400,
+        1400
       ],
       "size": [
         310.125,
-        358
+        406
       ],
       "flags": {},
       "order": 19,
@@ -1121,12 +1121,12 @@
         {
           "name": "original_image",
           "type": "IMAGE",
-          "link": 488
+          "link": 523
         },
         {
           "name": "generated_image",
           "type": "IMAGE",
-          "link": 489
+          "link": 524
         },
         {
           "name": "custom_mask",
@@ -1140,49 +1140,51 @@
           "name": "composited_image",
           "type": "IMAGE",
           "links": [
-            482,
-            483,
-            484
+            525,
+            526,
+            527
           ]
         },
         {
           "name": "change_mask",
           "type": "MASK",
           "links": [
-            485
+            528
           ]
         },
         {
           "name": "report",
           "type": "STRING",
           "links": [
-            486
+            529
           ]
         },
         {
           "name": "debug_gallery",
           "type": "IMAGE",
           "links": [
-            487
+            530
           ]
         }
       ],
       "properties": {
         "aux_id": "supermansundies/comfyui-klein-edit-composite",
-        "ver": "30bb786cd390907adc6e6af4628af8ef96d8bf8b",
+        "ver": "8b1324cbb7eb2a98ca144eaafd67d25d057ca224",
         "Node name for S&R": "KleinEditComposite"
       },
       "widgets_values": [
         -1,
         "medium",
-        false,
+        true,
         -1,
-        0.2,
         0.5,
-        false,
         0,
+        true,
+        true,
+        0.1,
         0.2,
-        0.7,
+        0.9,
+        true,
         true
       ]
     }
@@ -1389,67 +1391,67 @@
       "FLOAT"
     ],
     [
-      482,
-      225,
+      523,
+      212,
+      0,
+      231,
+      0,
+      "IMAGE"
+    ],
+    [
+      524,
+      101,
+      0,
+      231,
+      1,
+      "IMAGE"
+    ],
+    [
+      525,
+      231,
       0,
       194,
       0,
       "IMAGE"
     ],
     [
-      483,
-      225,
+      526,
+      231,
       0,
       195,
       1,
       "IMAGE"
     ],
     [
-      484,
-      225,
+      527,
+      231,
       0,
       209,
       1,
       "IMAGE"
     ],
     [
-      485,
-      225,
+      528,
+      231,
       1,
       199,
       0,
       "MASK"
     ],
     [
-      486,
-      225,
+      529,
+      231,
       2,
       220,
       0,
       "STRING"
     ],
     [
-      487,
-      225,
+      530,
+      231,
       3,
       219,
       0,
-      "IMAGE"
-    ],
-    [
-      488,
-      212,
-      0,
-      225,
-      0,
-      "IMAGE"
-    ],
-    [
-      489,
-      101,
-      0,
-      225,
-      1,
       "IMAGE"
     ]
   ],
@@ -1457,10 +1459,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 1.015255979947766,
+      "scale": 0.5209868481924381,
       "offset": [
-        1020.6109323748341,
-        -806.3172377520044
+        2374.3757929453445,
+        -245.05917696864907
       ]
     },
     "frontendVersion": "1.36.14",

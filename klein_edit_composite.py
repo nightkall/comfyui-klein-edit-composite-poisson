@@ -1,5 +1,5 @@
 """
-Klein Edit Composite Node
+Klein Edit Composite Node 
 ==============================================
 """
 
@@ -161,56 +161,170 @@ def _blur_kernel_for_diag(diag: float) -> tuple:
 
 
 # ---------------------------------------------------------------------------
-# LAB conversion
+# LAB conversion & Advanced Diffing
 # ---------------------------------------------------------------------------
 
 def _rgb_to_lab(rgb: np.ndarray) -> np.ndarray:
+    """Vectorized D65 RGB to LAB conversion natively supporting any shape."""
     lin = np.where(
         rgb <= 0.04045,
         rgb / 12.92,
         ((rgb + 0.055) / 1.055) ** 2.4,
     )
-    M = np.array([
-        [0.4124564, 0.3575761, 0.1804375],
-        [0.2126729, 0.7151522, 0.0721750],
-        [0.0193339, 0.1191920, 0.9503041],
+    M = np.array([[0.4124564, 0.3575761, 0.1804375],[0.2126729, 0.7151522, 0.0721750],[0.0193339, 0.1191920, 0.9503041],
     ], dtype=np.float32)
-    xyz = lin @ M.T / np.array([0.95047, 1.00000, 1.08883], dtype=np.float32)
+    
+    xyz = np.dot(lin, M.T) / np.array([0.95047, 1.00000, 1.08883], dtype=np.float32)
 
     def f(t):
         return np.where(t > (6 / 29) ** 3, t ** (1 / 3), t / (3 * (6 / 29) ** 2) + 4 / 29)
 
-    fx, fy, fz = f(xyz[..., 0]), f(xyz[..., 1]), f(xyz[..., 2])
-    return np.stack([116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)], axis=-1).astype(np.float32)
+    fx = f(xyz[..., 0])
+    fy = f(xyz[..., 1])
+    fz = f(xyz[..., 2])
+    
+    L = 116 * fy - 16
+    a = 500 * (fx - fy)
+    b = 200 * (fy - fz)
+    
+    return np.stack([L, a, b], axis=-1).astype(np.float32)
+
+def _lab_to_rgb(lab: np.ndarray) -> np.ndarray:
+    """Perfectly invert D65 LAB back to standard sRGB."""
+    L = lab[..., 0]
+    a = lab[..., 1]
+    b = lab[..., 2]
+
+    fy = (L + 16.0) / 116.0
+    fx = (a / 500.0) + fy
+    fz = fy - (b / 200.0)
+
+    delta = 6.0 / 29.0
+    
+    def f_inv(t):
+        return np.where(t > delta, t ** 3, 3.0 * (delta ** 2) * (t - 4.0 / 29.0))
+
+    # Convert back to XYZ
+    x = f_inv(fx) * 0.95047
+    y = f_inv(fy) * 1.00000
+    z = f_inv(fz) * 1.08883
+    xyz = np.stack([x, y, z], axis=-1)
+
+    # Inverse transformation matrix for sRGB D65
+    M_inv = np.array([[ 3.2404542, -1.5371385, -0.4985314],[-0.9692660,  1.8760108,  0.0415560],[ 0.0556434, -0.2040259,  1.0572252]
+    ], dtype=np.float32)
+
+    lin = np.dot(xyz, M_inv.T)
+    
+    # Clip negative linear values to avoid NaN during fractional power conversion
+    lin = np.clip(lin, 0.0, None)
+    
+    # Back to standard sRGB Gamma
+    rgb = np.where(
+        lin <= 0.0031308,
+        lin * 12.92,
+        1.055 * (lin ** (1.0 / 2.4)) - 0.055
+    )
+    
+    return np.clip(rgb, 0.0, 1.0).astype(np.float32)
+
+
+def _apply_color_match(orig_rgb: np.ndarray, gen_rgb: np.ndarray, 
+                       composite_mask: np.ndarray, valid_mask: np.ndarray, 
+                       blend_strength: float) -> tuple:
+    """Matches the color/lighting of gen_rgb to orig_rgb strictly using the background."""
+    if blend_strength <= 0.0:
+        return gen_rgb, False
+        
+    # Isolate pixels that are purely background AND valid after homography warping
+    bg_mask = (composite_mask < 0.05) & (valid_mask > 0.5)
+    
+    if bg_mask.sum() < 100:
+        return gen_rgb, False  # Not enough background to get reliable statistics
+        
+    orig_lab = _rgb_to_lab(orig_rgb)
+    gen_lab = _rgb_to_lab(gen_rgb)
+    
+    # Calculate Reinhard statistics (mean and std deviation)
+    orig_mean = orig_lab[bg_mask].mean(axis=0)
+    orig_std  = orig_lab[bg_mask].std(axis=0) + 1e-5
+    
+    gen_mean  = gen_lab[bg_mask].mean(axis=0)
+    gen_std   = gen_lab[bg_mask].std(axis=0) + 1e-5
+    
+    # Apply standard deviation and mean shift to the ENTIRE image
+    matched_lab = ((gen_lab - gen_mean) / gen_std) * orig_std + orig_mean
+    matched_rgb = _lab_to_rgb(matched_lab)
+    
+    # Alpha blend based on user preference
+    blended_rgb = (matched_rgb * blend_strength) + (gen_rgb * (1.0 - blend_strength))
+    return np.clip(blended_rgb, 0.0, 1.0), True
+
+def _compute_diff_map(orig_np: np.ndarray, gen_np: np.ndarray, blur_kernel: tuple) -> np.ndarray:
+    """
+    Computes a hybrid Color (Delta E) and Structural (Gradient) difference map.
+    This suppresses global lighting shifts while severely penalizing shape/content changes.
+    """
+    o_blur = cv2.GaussianBlur(orig_np, blur_kernel, 0)
+    g_blur = cv2.GaussianBlur(gen_np, blur_kernel, 0)
+
+    # --- 1. Color Difference ---
+    o_lab = _rgb_to_lab(o_blur)
+    g_lab = _rgb_to_lab(g_blur)
+    
+    diff_lab = o_lab - g_lab
+    diff_lab[..., 0] *= 0.5  # Ignore most global lighting (L) shifts
+    diff_lab[..., 1] *= 1.2  # Slightly boost a, b channels to catch hue changes
+    diff_lab[..., 2] *= 1.2
+    color_diff = np.sqrt(np.sum(diff_lab**2, axis=-1))
+
+    # --- 2. Structural Difference ---
+    o_gray = cv2.cvtColor((o_blur * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+    g_gray = cv2.cvtColor((g_blur * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+
+    o_gx = cv2.Sobel(o_gray, cv2.CV_32F, 1, 0, ksize=3)
+    o_gy = cv2.Sobel(o_gray, cv2.CV_32F, 0, 1, ksize=3)
+    g_gx = cv2.Sobel(g_gray, cv2.CV_32F, 1, 0, ksize=3)
+    g_gy = cv2.Sobel(g_gray, cv2.CV_32F, 0, 1, ksize=3)
+
+    o_mag = np.sqrt(o_gx**2 + o_gy**2)
+    g_mag = np.sqrt(g_gx**2 + g_gy**2)
+
+    # Scale gradients heavily to project structural changes into the Delta E value scale
+    struct_diff = np.abs(o_mag - g_mag) * 40.0
+
+    return color_diff + struct_diff
 
 
 # ---------------------------------------------------------------------------
-# SIFT pre-alignment — WITH DEBUG OUTPUTS
+# SIFT pre-alignment
 # ---------------------------------------------------------------------------
 
 def _sift_prealign(gray_orig: np.ndarray, gray_gen: np.ndarray,
                    gen_float: np.ndarray, orig_mask: np.ndarray = None,
                    debug: bool = False) -> tuple:
-    """Full Perspective (Homography) alignment of gen → orig using SIFT.
-
-    Returns: (aligned_gen_float, H_mat, n_inliers, validity_mask, debug_dict)
-    """
+    """Full Perspective (Homography) alignment of gen → orig using SIFT + CLAHE + MAGSAC."""
     H, W = gray_orig.shape[:2]
     debug_dict = {} if debug else None
 
-    sift = cv2.SIFT_create(5000)
-    kp1, des1 = sift.detectAndCompute(gray_orig, mask=orig_mask)
-    kp2, des2 = sift.detectAndCompute(gray_gen, mask=None)
+    # Apply CLAHE to dramatically boost SIFT robustness against heavy lighting/style edits
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    eq_orig = clahe.apply(gray_orig)
+    eq_gen = clahe.apply(gray_gen)
+
+    sift = cv2.SIFT_create(nfeatures=10000, contrastThreshold=0.03)
+    kp1, des1 = sift.detectAndCompute(eq_orig, mask=orig_mask)
+    kp2, des2 = sift.detectAndCompute(eq_gen, mask=None)
 
     if debug:
         debug_dict['orig_kp'] = len(kp1) if kp1 else 0
-        debug_dict['gen_kp'] = len(kp2) if kp2 else 0
+        debug_dict['gen_kp']  = len(kp2) if kp2 else 0
 
     fallback_valid = np.ones((H, W), dtype=np.float32)
 
     if des1 is None or des2 is None or len(kp1) < 10 or len(kp2) < 10:
         if debug:
-            debug_dict['match_viz'] = _draw_sift_matches(gray_orig, gray_gen, kp1 or [], kp2 or [], [])
+            debug_dict['match_viz'] = _draw_sift_matches(eq_orig, eq_gen, kp1 or [], kp2 or[],[])
         return gen_float, None, 0, fallback_valid, debug_dict
 
     FLANN_INDEX_KDTREE = 1
@@ -219,24 +333,32 @@ def _sift_prealign(gray_orig: np.ndarray, gray_gen: np.ndarray,
         dict(checks=80),
     )
     raw_matches = flann.knnMatch(des1, des2, k=2)
-    good = [m for m, n in raw_matches if m.distance < 0.7 * n.distance]
+    
+    # Relaxed ratio test to capture more candidates (MAGSAC will filter outliers)
+    good =[]
+    for match_pair in raw_matches:
+        if len(match_pair) == 2:
+            m, n = match_pair
+            if m.distance < 0.75 * n.distance:
+                good.append(m)
 
     if debug:
-        debug_dict['matches_before_ransac'] = _draw_sift_matches(gray_orig, gray_gen, kp1, kp2, good, None)
+        debug_dict['matches_before_ransac'] = _draw_sift_matches(eq_orig, eq_gen, kp1, kp2, good, None)
 
     if len(good) < 10:
         if debug:
-            debug_dict['match_viz'] = _draw_sift_matches(gray_orig, gray_gen, kp1, kp2, good, None)
+            debug_dict['match_viz'] = _draw_sift_matches(eq_orig, eq_gen, kp1, kp2, good, None)
         return gen_float, None, 0, fallback_valid, debug_dict
 
     pts_orig = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
     pts_gen  = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
 
-    H_mat, inlier_mask = cv2.findHomography(pts_gen, pts_orig, cv2.RANSAC, 4.0)
+    ransac_method = getattr(cv2, 'USAC_MAGSAC', cv2.RANSAC)
+    H_mat, inlier_mask = cv2.findHomography(pts_gen, pts_orig, ransac_method, 4.0)
     n_inliers = int(inlier_mask.sum()) if inlier_mask is not None else 0
 
     if debug:
-        debug_dict['match_viz'] = _draw_sift_matches(gray_orig, gray_gen, kp1, kp2, good, inlier_mask)
+        debug_dict['match_viz'] = _draw_sift_matches(eq_orig, eq_gen, kp1, kp2, good, inlier_mask)
         debug_dict['n_matches'] = len(good)
         debug_dict['n_inliers'] = n_inliers
 
@@ -244,9 +366,9 @@ def _sift_prealign(gray_orig: np.ndarray, gray_gen: np.ndarray,
         return gen_float, None, 0, fallback_valid, debug_dict
 
     det = H_mat[0, 0] * H_mat[1, 1] - H_mat[0, 1] * H_mat[1, 0]
-    if not (0.3 < det < 3.0):
+    if not (0.2 < det < 5.0):
         if debug:
-            debug_dict['failure_reason'] = f"Bad determinant: {det:.2f} (needs 0.3-3.0)"
+            debug_dict['failure_reason'] = f"Bad determinant: {det:.2f} (needs 0.2-5.0)"
         return gen_float, None, 0, fallback_valid, debug_dict
 
     aligned = cv2.warpPerspective(
@@ -262,18 +384,22 @@ def _sift_prealign(gray_orig: np.ndarray, gray_gen: np.ndarray,
     )
 
     if debug:
-        debug_dict['homography'] = H_mat
+        debug_dict['homography']  = H_mat
         debug_dict['determinant'] = det
 
     return aligned, H_mat, n_inliers, valid_mask, debug_dict
 
 
 # ---------------------------------------------------------------------------
-# Optical flow & helpers
+# Optical flow & Morphology helpers
 # ---------------------------------------------------------------------------
 
 def _dis_flow(gray_a: np.ndarray, gray_b: np.ndarray, preset: int) -> np.ndarray:
-    return cv2.DISOpticalFlow_create(preset).calc(gray_a, gray_b, None)
+    """Computes DIS flow and median blurs the vector field to prevent extreme tearing."""
+    flow = cv2.DISOpticalFlow_create(preset).calc(gray_a, gray_b, None)
+    flow[..., 0] = cv2.medianBlur(flow[..., 0], 5)
+    flow[..., 1] = cv2.medianBlur(flow[..., 1], 5)
+    return flow
 
 
 def _warp(image: np.ndarray, flow: np.ndarray) -> np.ndarray:
@@ -298,6 +424,26 @@ def _occlusion_mask(flow_fwd: np.ndarray, flow_bwd: np.ndarray, threshold: float
     return (_fwd_bwd_error(flow_fwd, flow_bwd) > threshold).astype(np.float32)
 
 
+def _fast_guided_filter(I_gray: np.ndarray, p: np.ndarray, r: int, eps: float = 1e-3) -> np.ndarray:
+    """O(1) edge-preserving smoothing filter used to snap masks perfectly to image boundaries."""
+    ksize = (r * 2 + 1, r * 2 + 1)
+    mean_I = cv2.blur(I_gray, ksize)
+    mean_p = cv2.blur(p, ksize)
+    mean_Ip = cv2.blur(I_gray * p, ksize)
+    cov_Ip = mean_Ip - mean_I * mean_p
+    
+    mean_II = cv2.blur(I_gray * I_gray, ksize)
+    var_I = mean_II - mean_I * mean_I
+    
+    a = cov_Ip / (var_I + eps)
+    b = mean_p - a * mean_I
+    
+    mean_a = cv2.blur(a, ksize)
+    mean_b = cv2.blur(b, ksize)
+    
+    return mean_a * I_gray + mean_b
+
+
 def _grow_mask(mask: np.ndarray, grow_px: int) -> np.ndarray:
     if grow_px == 0:
         return mask
@@ -308,66 +454,99 @@ def _grow_mask(mask: np.ndarray, grow_px: int) -> np.ndarray:
 
 
 def _open_mask(mask: np.ndarray, radius_px: int) -> np.ndarray:
-    """Morphological opening (erode then re-dilate) to destroy small noise blobs.
+    """Remove speckles via opening-by-reconstruction.
 
-    Any connected region whose radius is smaller than *radius_px* will be
-    removed.  Larger regions are restored to approximately their original size
-    by the subsequent re-dilation, so real edges are largely preserved.
+    Standard opening (erode then dilate) kills isolated noise but also rounds off
+    sharp points and thin protrusions on real regions.  Opening by reconstruction
+    fixes this: after erosion the seed is geodesically dilated — it can only grow
+    back within the bounds of the original mask.  Any region that survived erosion
+    is fully restored to its original shape; any region that was completely erased
+    (i.e. genuine speckle) cannot recover and stays gone.
     """
     if radius_px <= 0:
         return mask
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius_px * 2 + 1, radius_px * 2 + 1))
-    eroded  = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_ERODE,  k)
-    reopened = cv2.morphologyEx(eroded,               cv2.MORPH_DILATE, k)
-    return reopened.astype(np.float32)
+    marker = cv2.erode(mask.astype(np.uint8), k).astype(np.float32)  # seed: speckles are gone
+    orig   = mask.astype(np.float32)                                   # ceiling: can't grow beyond original
+    k3     = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))     # unit dilation step
+    while True:
+        expanded = np.minimum(cv2.dilate(marker, k3), orig)  # dilate then clip to original
+        if np.array_equal(expanded, marker):                  # converged — no further change
+            break
+        marker = expanded
+    return marker
 
 
 def _fill_holes(mask: np.ndarray) -> np.ndarray:
-    """Fill holes enclosed within each connected white island independently.
-
-    Each white island is processed separately: a hole is only filled if it is
-    fully enclosed by *that island alone*.  This prevents gaps that connect to
-    the image exterior (e.g. ladder rungs open to the background) from being
-    flooded, while still filling genuine interior voids.
-    """
     binary = (mask > 0.5).astype(np.uint8)
     h, w = binary.shape
     n, labeled = cv2.connectedComponents(binary, connectivity=8)
     result = binary.copy()
     for island_id in range(1, n):
-        # Isolate this island in a zero-padded canvas (exterior = 0)
         island = (labeled == island_id).astype(np.uint8)
         padded = np.zeros((h + 2, w + 2), dtype=np.uint8)
         padded[1:h+1, 1:w+1] = island
         inv = 1 - padded
-        cv2.floodFill(inv, None, (0, 0), 0)   # erase exterior background
-        interior = inv[1:h+1, 1:w+1]          # what remains = enclosed holes
+        cv2.floodFill(inv, None, (0, 0), 0)
+        interior = inv[1:h+1, 1:w+1]
         result = np.clip(result + interior, 0, 1).astype(np.uint8)
     return result.astype(np.float32)
+
+
+def _bleed_mask(mask: np.ndarray, valid_mask: np.ndarray) -> np.ndarray:
+    """
+    Extrapolates the mask into invalid border regions (where the generated image shrunk).
+    This prevents the original image from showing through as a thin frame around edits.
+    """
+    invalid = (valid_mask < 0.5).astype(np.uint8)
+    if invalid.max() == 0:
+        return mask
+        
+    dist = cv2.distanceTransform(invalid, cv2.DIST_L2, 3)
+    max_depth = int(np.ceil(np.max(dist)))
+    
+    if max_depth == 0:
+        return mask
+        
+    bled_mask = mask.copy()
+    remaining = max_depth
+    # Iterative dilation guarantees we reach the edge without massive slow kernels
+    while remaining > 0:
+        step = min(remaining, 60)
+        k_size = step * 2 + 1
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+        bled_mask = cv2.dilate(bled_mask, k)
+        remaining -= step
+        
+    # Apply the bled values ONLY in the void regions
+    return np.where(valid_mask > 0.5, mask, bled_mask).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
 # Auto-tuning
 # ---------------------------------------------------------------------------
 
-def _auto_delta_e_threshold(delta_e: np.ndarray) -> float:
-    p75 = float(np.percentile(delta_e, 75))
-    p90 = float(np.percentile(delta_e, 90))
-    spread = p90 - p75
-    threshold = p75 + max(spread * 0.4, 3.0) if spread > 5.0 else p75 + max(spread * 0.6, 4.0)
-    return float(np.clip(threshold, 4.0, 75.0))
-
-
-def _auto_occlusion_threshold(flow_fwd: np.ndarray, flow_bwd: np.ndarray) -> float:
-    err = _fwd_bwd_error(flow_fwd, flow_bwd)
-    p85 = float(np.percentile(err, 85))
-    p95 = float(np.percentile(err, 95))
-    threshold = p95 + max((p95 - p85) * 0.5, 0.5)
-    return float(np.clip(threshold, 1.0, 50.0))
+def _auto_threshold_mad(diff_map: np.ndarray, valid_mask: np.ndarray = None, 
+                        k: float = 6.0, min_t: float = 3.0, max_t: float = 60.0) -> float:
+    """Computes a highly robust threshold based on Median Absolute Deviation (MAD)."""
+    if valid_mask is not None and valid_mask.sum() > 100:
+        sample = diff_map[valid_mask > 0.5]
+    else:
+        sample = diff_map.flatten()
+        
+    if len(sample) > 50000:
+        sample = np.random.choice(sample, 50000, replace=False)
+        
+    med = float(np.median(sample))
+    mad = float(np.median(np.abs(sample - med)))
+    mad = max(mad, 0.5)  # Enforce minimum noise floor
+    
+    threshold = med + k * mad
+    return float(np.clip(threshold, min_t, max_t))
 
 
 # ---------------------------------------------------------------------------
-# Core detection + Composite (V6.1 with Debug)
+# Core Composite Logic
 # ---------------------------------------------------------------------------
 
 FLOW_PRESETS = {
@@ -385,10 +564,12 @@ def _composite(original_np: np.ndarray,
                grow_px: int,
                close_radius: int,
                feather_px: float,
+               color_match_blend: float,
                noise_removal_px: int = 0,
                max_islands: int = 0,
                fill_holes: bool = False,
                use_occlusion: bool = False,
+               fill_borders: bool = True,
                custom_mask: np.ndarray = None,
                debug: bool = False) -> tuple:
 
@@ -403,27 +584,21 @@ def _composite(original_np: np.ndarray,
 
     blur_kernel = _blur_kernel_for_diag(diag)
     sk = max(_blur_kernel_for_diag(diag)[0], 5)
-    if sk % 2 == 0:
-        sk += 1
-
-    orig_blur = cv2.GaussianBlur(original_np, blur_kernel, 0)
-    orig_lab  = _rgb_to_lab(orig_blur.reshape(-1, 3)).reshape(H, W, 3)
+    if sk % 2 == 0: sk += 1
 
     auto_report = {}
 
     # ------------------------------------------------------------------
-    # Custom mask override: skip internal detection entirely
+    # Custom mask override: bypass internal change detection entirely
     # ------------------------------------------------------------------
     if custom_mask is not None:
         if debug:
             debug_images['custom_mask_override'] = np.stack([custom_mask] * 3, axis=-1)
             debug_images['mask_overlay'] = original_np.copy()
             debug_images['mask_overlay'][custom_mask > 0.5] = (
-                debug_images['mask_overlay'][custom_mask > 0.5] * 0.5
-                + np.array([0, 0.5, 0])
+                debug_images['mask_overlay'][custom_mask > 0.5] * 0.5 + np.array([0, 0.5, 0])
             )
 
-        # We still run alignment so the composite uses a properly warped gen
         gen_pre, _, inliers, valid, debug_sift = _sift_prealign(
             gray_orig, gray_gen, generated_np, orig_mask=None, debug=debug
         )
@@ -431,18 +606,38 @@ def _composite(original_np: np.ndarray,
             debug_images['pass1_sift_matches'] = debug_sift.get('match_viz', np.zeros((H, W, 3)))
             debug_images['pass1_validity_mask'] = valid.copy()
 
-        sharp_mask    = np.clip(custom_mask, 0.0, 1.0) * valid
-        composite_mask = sharp_mask
+        sharp_mask = np.clip(custom_mask, 0.0, 1.0) * valid
+        
+        if fill_borders:
+            sharp_mask = _bleed_mask(sharp_mask, valid)
 
         if feather_px > 0:
             inv_mask = (sharp_mask < 0.5).astype(np.uint8)
             if inv_mask.min() == 0:
-                dist      = cv2.distanceTransform(inv_mask, cv2.DIST_L2, 5)
-                fade_dist = feather_px * 3.0
-                t         = np.clip(1.0 - (dist / fade_dist), 0.0, 1.0)
-                composite_mask = (t * t * (3.0 - 2.0 * t)).astype(np.float32)
+                dist = cv2.distanceTransform(inv_mask, cv2.DIST_L2, 5)
+                fade_dist = feather_px * 2.5
+                t = np.clip(1.0 - (dist / fade_dist), 0.0, 1.0)
+                base_mask = (t * t * (3.0 - 2.0 * t)).astype(np.float32)
+                
+                # Guided Filter snaps mask directly to edges of the original image
+                gray_guide = cv2.cvtColor(orig_u8, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+                composite_mask = _fast_guided_filter(gray_guide, base_mask, max(2, int(feather_px)), eps=1e-3)
+                composite_mask = np.clip(composite_mask, 0.0, 1.0)
+            else:
+                composite_mask = sharp_mask
+        else:
+            composite_mask = sharp_mask
 
-        composite_mask *= valid
+        if not fill_borders:
+            composite_mask *= valid
+        
+        # --- NEW COLOR MATCH ---
+        gen_pre, color_matched = _apply_color_match(
+            original_np, gen_pre, composite_mask, valid, color_match_blend
+        )
+        if color_matched: auto_report['color_match_applied'] = True
+        # -----------------------
+
         m3     = composite_mask[..., np.newaxis]
         result = np.clip(original_np * (1.0 - m3) + gen_pre * m3, 0, 1)
 
@@ -454,27 +649,21 @@ def _composite(original_np: np.ndarray,
         if use_occlusion:
             flow_bwd_final = _dis_flow(
                 cv2.cvtColor((np.clip(gen_pre, 0, 1) * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY),
-                gray_orig,
-                flow_preset,
+                gray_orig, flow_preset
             )
-            occ_thresh = (
-                occlusion_threshold if occlusion_threshold >= 0
-                else _auto_occlusion_threshold(flow_fwd_final, flow_bwd_final)
-            )
-            if occlusion_threshold < 0:
-                auto_report['auto_occlusion'] = occ_thresh
+            occ_thresh = occlusion_threshold if occlusion_threshold >= 0 else _auto_threshold_mad(_fwd_bwd_error(flow_fwd_final, flow_bwd_final), valid, k=5.0, min_t=1.0, max_t=30.0)
+            if occlusion_threshold < 0: auto_report['auto_occlusion'] = occ_thresh
         else:
             flow_bwd_final = None
             occ_thresh     = 0
 
         flow_mag  = np.sqrt((flow_fwd_final**2).sum(axis=2))
-        n_changed = int((sharp_mask > 0.5).sum())
         stats = {
-            "changed_pct":    100 * n_changed / (H * W),
+            "changed_pct":    100 * float((sharp_mask > 0.5).sum()) / (H * W),
             "occluded_px":    int((_fwd_bwd_error(flow_fwd_final, flow_bwd_final) > occ_thresh).sum()) if use_occlusion else 0,
             "flow_mean_px":   float(flow_mag.mean()),
             "flow_p99_px":    float(np.percentile(flow_mag, 99)),
-            "median_de":      float(np.median(np.zeros((H, W)))),  # N/A in override mode
+            "median_de":      0.0,
             "resolution":     f"{W}x{H}",
             "diagonal_px":    round(diag),
             "pass1_inliers":  inliers,
@@ -489,10 +678,7 @@ def _composite(original_np: np.ndarray,
                 original_np, gen_pre, ("Original", "Aligned (custom mask)")
             )
             debug_images['composite_breakdown'] = np.hstack([
-                original_np,
-                gen_pre,
-                result,
-                np.stack([composite_mask] * 3, axis=-1),
+                original_np, gen_pre, result, np.stack([composite_mask] * 3, axis=-1),
             ])
 
         return result, composite_mask, stats, debug_images
@@ -511,50 +697,37 @@ def _composite(original_np: np.ndarray,
         valid_overlay[valid_1 < 0.5] = [1, 0, 0]
         debug_images['pass1_validity_overlay'] = valid_overlay
 
-    gray_gen_pre_1 = cv2.cvtColor(
-        (np.clip(gen_pre_1, 0, 1) * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY
-    )
+    gray_gen_pre_1 = cv2.cvtColor((np.clip(gen_pre_1, 0, 1) * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    
     flow_fwd_1 = _dis_flow(gray_orig, gray_gen_pre_1, flow_preset)
     flow_bwd_1 = _dis_flow(gray_gen_pre_1, gray_orig, flow_preset) if use_occlusion else None
 
     warped_gen_1 = _warp(gen_pre_1, flow_fwd_1)
-    wgen_lab_1   = _rgb_to_lab(
-        cv2.GaussianBlur(warped_gen_1, blur_kernel, 0).reshape(-1, 3)
-    ).reshape(H, W, 3)
 
-    lab_diff_1 = orig_lab - wgen_lab_1
-    lab_diff_1[..., 0] *= 0.7
-    delta_e_1_warped = cv2.GaussianBlur(np.sqrt((lab_diff_1**2).sum(axis=2)), (sk, sk), 0)
+    diff_1_direct = _compute_diff_map(original_np, gen_pre_1, blur_kernel)
+    diff_1_warped = _compute_diff_map(original_np, warped_gen_1, blur_kernel)
 
-    # Direct (unwarped) comparison — immune to warp-induced holes inside edit regions.
-    gen_lab_1_direct = _rgb_to_lab(
-        cv2.GaussianBlur(gen_pre_1, blur_kernel, 0).reshape(-1, 3)
-    ).reshape(H, W, 3)
-    lab_diff_1_direct = orig_lab - gen_lab_1_direct
-    lab_diff_1_direct[..., 0] *= 0.7
-    delta_e_1_direct = cv2.GaussianBlur(np.sqrt((lab_diff_1_direct**2).sum(axis=2)), (sk, sk), 0)
+    de_thresh = delta_e_threshold if delta_e_threshold >= 0 else _auto_threshold_mad(diff_1_direct, valid_1)
 
-    # Blend: direct leads where the direct signal is already strong (edit regions);
-    # warped leads in the background (better at suppressing camera-shake noise).
-    de_thresh  = delta_e_threshold if delta_e_threshold >= 0 else _auto_delta_e_threshold(delta_e_1_direct)
-    if use_occlusion:
-        occ_thresh = occlusion_threshold if occlusion_threshold >= 0 else _auto_occlusion_threshold(flow_fwd_1, flow_bwd_1)
-    blend_w_1  = np.clip(delta_e_1_direct / (de_thresh + 1e-6), 0.0, 1.0)
-    delta_e_1  = blend_w_1 * delta_e_1_direct + (1.0 - blend_w_1) * delta_e_1_warped
+    # Blend: direct diff signals strongly inside the edit, warped diff is cleaner in the background
+    blend_w_1 = np.clip(diff_1_direct / (de_thresh + 1e-6), 0.0, 1.0)
+    delta_e_1_raw = blend_w_1 * diff_1_direct + (1.0 - blend_w_1) * diff_1_warped
+    delta_e_1 = cv2.GaussianBlur(delta_e_1_raw, (sk, sk), 0)
 
     coarse_mask = (delta_e_1 > de_thresh).astype(np.float32)
+
     if use_occlusion:
+        occ_thresh = occlusion_threshold if occlusion_threshold >= 0 else _auto_threshold_mad(_fwd_bwd_error(flow_fwd_1, flow_bwd_1), valid_1, k=5.0, min_t=1.0, max_t=30.0)
         coarse_mask = np.maximum(coarse_mask, _occlusion_mask(flow_fwd_1, flow_bwd_1, occ_thresh))
+        
     coarse_mask *= valid_1
 
     if debug:
-        de_normalized = np.clip(delta_e_1 / 50.0, 0, 1)
-        debug_images['pass1_delta_e']    = _apply_heatmap(original_np, de_normalized)
+        de_normalized = np.clip(delta_e_1 / (de_thresh * 1.5 + 1e-6), 0, 1)
+        debug_images['pass1_delta_e']     = _apply_heatmap(original_np, de_normalized)
         debug_images['pass1_coarse_mask'] = coarse_mask.copy()
-        debug_images['pass1_flow']       = _flow_to_color(flow_fwd_1)
-        debug_images['pass1_alignment']  = _create_side_by_side(
-            original_np, warped_gen_1, ("Original", "Pass1 Warped")
-        )
+        debug_images['pass1_flow']        = _flow_to_color(flow_fwd_1)
+        debug_images['pass1_alignment']   = _create_side_by_side(original_np, warped_gen_1, ("Original", "Pass1 Warped"))
 
     # ------------------------------------------------------------------
     # PASS 2: Masked SIFT Alignment (Background Only)
@@ -572,11 +745,8 @@ def _composite(original_np: np.ndarray,
             pass2_used = True
             auto_report["pass2_inliers"] = inliers_2
             if debug:
-                debug_images['pass2_sift_matches'] = debug_sift2.get('match_viz', np.zeros((H, W, 3)))
+                debug_images['pass2_sift_matches']  = debug_sift2.get('match_viz', np.zeros((H, W, 3)))
                 debug_images['pass2_validity_mask'] = valid_2.copy()
-                valid_overlay2 = original_np.copy()
-                valid_overlay2[valid_2 < 0.5] = [1, 0, 0]
-                debug_images['pass2_validity_overlay'] = valid_overlay2
         else:
             final_aligned_gen, valid_2 = gen_pre_1, valid_1
             auto_report["pass2_inliers"] = 0
@@ -589,43 +759,31 @@ def _composite(original_np: np.ndarray,
     # ------------------------------------------------------------------
     # PASS 3: Final Precision Mask
     # ------------------------------------------------------------------
-    gray_gen_pre_2 = cv2.cvtColor(
-        (np.clip(final_aligned_gen, 0, 1) * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY
-    )
+    gray_gen_pre_2 = cv2.cvtColor((np.clip(final_aligned_gen, 0, 1) * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    
     flow_fwd_2 = _dis_flow(gray_orig, gray_gen_pre_2, flow_preset)
     flow_bwd_2 = _dis_flow(gray_gen_pre_2, gray_orig, flow_preset) if use_occlusion else None
 
     warped_gen_final = _warp(final_aligned_gen, flow_fwd_2)
-    wgen_lab_2       = _rgb_to_lab(
-        cv2.GaussianBlur(warped_gen_final, blur_kernel, 0).reshape(-1, 3)
-    ).reshape(H, W, 3)
 
-    lab_diff_2 = orig_lab - wgen_lab_2
-    lab_diff_2[..., 0] *= 0.7
-    delta_e_2_warped = cv2.GaussianBlur(np.sqrt((lab_diff_2**2).sum(axis=2)), (sk, sk), 0)
+    diff_2_direct = _compute_diff_map(original_np, final_aligned_gen, blur_kernel)
+    diff_2_warped = _compute_diff_map(original_np, warped_gen_final, blur_kernel)
 
-    # Direct (unwarped) comparison — immune to warp-induced holes inside edit regions.
-    gen_lab_2_direct = _rgb_to_lab(
-        cv2.GaussianBlur(final_aligned_gen, blur_kernel, 0).reshape(-1, 3)
-    ).reshape(H, W, 3)
-    lab_diff_2_direct = orig_lab - gen_lab_2_direct
-    lab_diff_2_direct[..., 0] *= 0.7
-    delta_e_2_direct = cv2.GaussianBlur(np.sqrt((lab_diff_2_direct**2).sum(axis=2)), (sk, sk), 0)
-
-    # Blend: direct leads where the direct signal is already strong (edit regions);
-    # warped leads in the background (better at suppressing camera-shake noise).
-    blend_w_2  = np.clip(delta_e_2_direct / (de_thresh + 1e-6), 0.0, 1.0)
-    delta_e_2  = blend_w_2 * delta_e_2_direct + (1.0 - blend_w_2) * delta_e_2_warped
+    blend_w_2 = np.clip(diff_2_direct / (de_thresh + 1e-6), 0.0, 1.0)
+    delta_e_2_raw = blend_w_2 * diff_2_direct + (1.0 - blend_w_2) * diff_2_warped
+    delta_e_2 = cv2.GaussianBlur(delta_e_2_raw, (sk, sk), 0)
 
     sharp_mask = (delta_e_2 > de_thresh).astype(np.float32)
+    
     if use_occlusion:
         sharp_mask = np.maximum(sharp_mask, _occlusion_mask(flow_fwd_2, flow_bwd_2, occ_thresh))
+        
     sharp_mask *= valid_2
 
-    if delta_e_threshold  < 0: auto_report["auto_delta_e"]   = de_thresh
+    if delta_e_threshold < 0: auto_report["auto_delta_e"] = de_thresh
     if use_occlusion and occlusion_threshold < 0: auto_report["auto_occlusion"] = occ_thresh
 
-    # Morphology
+    # Morphological clean up
     if noise_removal_px > 0:
         sharp_mask = _open_mask(sharp_mask, noise_removal_px)
         sharp_mask *= valid_2
@@ -633,14 +791,12 @@ def _composite(original_np: np.ndarray,
         sharp_mask = _grow_mask(sharp_mask, grow_px)
         sharp_mask *= valid_2
     if close_radius > 0:
-        k          = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_radius * 2 + 1, close_radius * 2 + 1))
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_radius * 2 + 1, close_radius * 2 + 1))
         sharp_mask = cv2.morphologyEx(sharp_mask.astype(np.uint8), cv2.MORPH_CLOSE, k).astype(np.float32)
     if max_islands > 0:
-        n, labeled, stats_cc, _ = cv2.connectedComponentsWithStats(
-            (sharp_mask > 0.5).astype(np.uint8), connectivity=8
-        )
-        if n - 1 > max_islands:  # n includes background label 0
-            areas = [(stats_cc[i, cv2.CC_STAT_AREA], i) for i in range(1, n)]
+        n, labeled, stats_cc, _ = cv2.connectedComponentsWithStats((sharp_mask > 0.5).astype(np.uint8), connectivity=8)
+        if n - 1 > max_islands:
+            areas =[(stats_cc[i, cv2.CC_STAT_AREA], i) for i in range(1, n)]
             areas.sort(reverse=True)
             keep = {i for _, i in areas[:max_islands]}
             sharp_mask[np.isin(labeled, list(keep), invert=True) & (labeled > 0)] = 0
@@ -649,26 +805,43 @@ def _composite(original_np: np.ndarray,
         sharp_mask = _fill_holes(sharp_mask)
         sharp_mask *= valid_2
 
-    # Feathered mask for compositing
+    # Extrapolate mask into invalid regions (shrinkage voids)
+    if fill_borders:
+        sharp_mask = _bleed_mask(sharp_mask, valid_2)
+
+    # High quality edge-aware mask feathering
     if feather_px > 0:
         inv_mask = (sharp_mask < 0.5).astype(np.uint8)
         if inv_mask.min() == 0:
             dist      = cv2.distanceTransform(inv_mask, cv2.DIST_L2, 5)
-            fade_dist = feather_px * 3.0
+            fade_dist = feather_px * 2.5
             t         = np.clip(1.0 - (dist / fade_dist), 0.0, 1.0)
-            composite_mask = (t * t * (3.0 - 2.0 * t)).astype(np.float32)
+            base_mask = (t * t * (3.0 - 2.0 * t)).astype(np.float32)
+            
+            # Snap mask seamlessly to internal edge structures
+            gray_guide = cv2.cvtColor(orig_u8, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+            composite_mask = _fast_guided_filter(gray_guide, base_mask, max(2, int(feather_px)), eps=1e-3)
+            composite_mask = np.clip(composite_mask, 0.0, 1.0)
         else:
             composite_mask = sharp_mask
     else:
         composite_mask = sharp_mask
 
-    composite_mask *= valid_2
+    if not fill_borders:
+        composite_mask *= valid_2
 
-    # Composite
+    # --- NEW COLOR MATCH ---
+    final_aligned_gen, color_matched = _apply_color_match(
+        original_np, final_aligned_gen, composite_mask, valid_2, color_match_blend
+    )
+    if color_matched: auto_report['color_match_applied'] = True
+    # -----------------------
+
+    # Final Image Blend
     m3     = composite_mask[..., np.newaxis]
     result = np.clip(original_np * (1.0 - m3) + final_aligned_gen * m3, 0, 1)
 
-    # Stats
+    # Reporting Stats
     flow_mag  = np.sqrt((flow_fwd_2**2).sum(axis=2))
     n_changed = int((sharp_mask > 0.5).sum())
     stats = {
@@ -688,7 +861,7 @@ def _composite(original_np: np.ndarray,
         debug_images['final_flow']           = _flow_to_color(flow_fwd_2)
         debug_images['final_flow_magnitude'] = flow_mag / (flow_mag.max() + 1e-6)
 
-        de_norm = np.clip(delta_e_2 / 30.0, 0, 1)
+        de_norm = np.clip(delta_e_2 / (de_thresh * 1.5 + 1e-6), 0, 1)
         debug_images['final_delta_e'] = _apply_heatmap(original_np, de_norm)
 
         debug_images['final_sharp_mask']     = sharp_mask.copy()
@@ -704,10 +877,7 @@ def _composite(original_np: np.ndarray,
             original_np, warped_gen_final, ("Original", "Final Warped")
         )
         debug_images['composite_breakdown'] = np.hstack([
-            original_np,
-            final_aligned_gen,
-            result,
-            np.stack([composite_mask] * 3, axis=-1),
+            original_np, final_aligned_gen, result, np.stack([composite_mask] * 3, axis=-1),
         ])
 
     return result, composite_mask, stats, debug_images
@@ -720,7 +890,7 @@ def _composite(original_np: np.ndarray,
 class KleinEditComposite:
     """
     Composites a Klein edit onto the original image with full debug visualization.
-    
+    Uses robust MAGSAC SIFT alignment, Gradient+LAB structure difference, and Guided Filter blending.
     """
 
     CATEGORY = "image/Klein"
@@ -734,68 +904,175 @@ class KleinEditComposite:
                 # --- Detection ---
                 "delta_e_threshold": ("FLOAT", {
                     "default": -1.0, "min": -1.0, "max": 100.0, "step": 1.0,
-                    "tooltip": "Set to -1 for automatic tuning.",
+                    "tooltip": (
+                        "Controls how different a pixel must be (in perceptual color distance) "
+                        "to be considered 'changed' and included in the composite mask. "
+                        "Lower values = more sensitive, picking up subtle edits but risking false "
+                        "positives in unchanged areas. Higher values = less sensitive, only catching "
+                        "obvious changes but potentially missing fine details. "
+                        "Set to -1 to let the node auto-tune this threshold using Median Absolute "
+                        "Deviation (MAD) — recommended for most cases."
+                    ),
                 }),
                 "flow_quality": (["medium", "fast", "ultrafast"], {
                     "default": "medium",
+                    "tooltip": (
+                        "Sets the precision of the optical flow calculation used to detect "
+                        "motion and structural changes between the original and generated images. "
+                        "'medium' gives the best accuracy and is recommended for most edits. "
+                        "'fast' reduces computation time at a slight accuracy cost — useful for "
+                        "quick previews or large images. "
+                        "'ultrafast' is the lowest quality but quickest — suitable for rough drafts "
+                        "or iterating on settings before a final render."
+                    ),
                 }),
                 "use_occlusion": ("BOOLEAN", {
                     "default": False,
                     "tooltip": (
-                        "Add occlusion detection to the change mask. "
-                        "Useful for camera-motion edits but causes bleed on heavy color edits. "
-                        "Disabled by default."
+                        "When enabled, adds occlusion detection to the change mask — areas where "
+                        "one image occludes content visible in the other (e.g. an object moves and "
+                        "reveals background behind it). "
+                        "Turn ON when the edit involves camera movement or objects shifting position, "
+                        "as it ensures those newly revealed regions are included in the mask. "
+                        "Leave OFF for color, texture, or style edits — occlusion detection can "
+                        "bleed the mask into unchanged areas when there is no real motion."
                     ),
                 }),
                 "occlusion_threshold": ("FLOAT", {
                     "default": -1.0, "min": -1.0, "max": 50.0, "step": 0.5,
-                    "tooltip": "Only used when use_occlusion is enabled. -1 = auto.",
+                    "tooltip": (
+                        "Only active when 'use_occlusion' is enabled. Controls how large the "
+                        "forward-backward optical flow error must be before a pixel is classified "
+                        "as occluded. Lower values flag more pixels as occluded (wider mask, "
+                        "more bleed risk). Higher values only flag clearly inconsistent flow "
+                        "(tighter mask, may miss subtle occlusions). "
+                        "Set to -1 to auto-tune using Median Absolute Deviation — recommended."
+                    ),
                 }),
                 # --- Mask cleanup ---
                 "noise_removal_pct": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 3.0, "step": 0.05,
                     "tooltip": (
-                        "Morphological opening radius as % of image diagonal. "
-                        "Erodes then re-dilates the raw mask to destroy speckle noise "
-                        "smaller than this radius. 0 = disabled."
+                        "Removes speckle noise from the raw change mask using morphological opening "
+                        "(erode then dilate). Value is the radius as a percentage of the image diagonal, "
+                        "so it scales automatically with resolution. "
+                        "Increase this when the mask has many tiny isolated dots or grains in areas "
+                        "that should be clean background — higher values eliminate larger speckles. "
+                        "Keep at 0 (disabled) if the edit has fine detail at the edges, as too high "
+                        "a value will erode legitimate thin features like hair or text."
                     ),
                 }),
                 "close_radius_pct": ("FLOAT", {
                     "default": 0.5, "min": 0.0, "max": 5.0, "step": 0.1,
+                    "tooltip": (
+                        "Fills small gaps and connects nearby mask regions using morphological closing "
+                        "(dilate then erode). Value is the radius as a percentage of the image diagonal. "
+                        "Increase this to bridge gaps between nearby changed regions so they merge into "
+                        "one solid area — useful when the mask has broken edges or thin holes cutting "
+                        "through the middle of an edited object. "
+                        "Lower values preserve tight separation between distinct changed regions. "
+                        "Too high a value can merge separate objects that should remain independent."
+                    ),
                 }),
                 "fill_holes": ("BOOLEAN", {
                     "default": False,
                     "tooltip": (
-                        "Flood-fill enclosed interior holes in the mask. "
-                        "Only fills regions fully surrounded by mask; outer boundary is unchanged."
+                        "Flood-fills enclosed interior holes inside the mask. "
+                        "Turn ON when the detected mask has gaps or voids inside an edited region — "
+                        "for example, a changed object whose interior was not fully detected. This "
+                        "ensures the entire interior is composited rather than leaving patches of the "
+                        "original showing through. "
+                        "Leave OFF if you intentionally need transparency or cut-outs inside the mask, "
+                        "or if interior regions are genuinely unchanged background."
+                    ),
+                }),
+                "fill_borders": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": (
+                        "When alignment warps or shifts the generated image, it can leave void border "
+                        "regions where no generated pixel exists. "
+                        "Turn ON (default) to extrapolate the mask into those borders and fill them "
+                        "with mirrored pixels from the generated image, hiding the void seamlessly. "
+                        "Turn OFF to instead fall back to the original image in those border areas — "
+                        "useful if the mirrored fill looks wrong or if the warp is large enough that "
+                        "mirroring produces visible artifacts."
                     ),
                 }),
                 "max_islands": ("INT", {
                     "default": 0, "min": 0, "max": 32, "step": 1,
                     "tooltip": (
-                        "Keep only the N largest connected regions in the mask, discard the rest. "
-                        "0 = disabled (keep all)."
+                        "Limits the mask to only the N largest connected regions, discarding all smaller "
+                        "isolated patches. Set to 1 to keep only the single largest changed area. "
+                        "Increase to allow a small number of distinct regions (e.g. 2 for a foreground "
+                        "object and a shadow). "
+                        "Set to 0 (default) to keep all regions regardless of size — best when the edit "
+                        "spans many small areas like texture or pattern changes. "
+                        "Use in combination with noise_removal to first eliminate tiny speckles before "
+                        "this filter acts on the remaining islands."
                     ),
                 }),
                 "grow_mask_pct": ("FLOAT", {
                     "default": 0.0, "min": -3.0, "max": 3.0, "step": 0.1,
+                    "tooltip": (
+                        "Expands or contracts the final mask boundary as a percentage of the image diagonal. "
+                        "Positive values grow the mask outward — use this to ensure the composite fully "
+                        "covers the edited region when detection falls slightly short of the true edges. "
+                        "Negative values shrink the mask inward — useful for tightening a mask that bleeds "
+                        "into unchanged background. "
+                        "0 leaves the mask exactly as detected. Feathering is applied after this step, "
+                        "so growth and feather work together to produce a clean edge."
+                    ),
                 }),
                 # --- Output ---
                 "feather_pct": ("FLOAT", {
                     "default": 2.0, "min": 0.0, "max": 10.0, "step": 0.25,
+                    "tooltip": (
+                        "Controls the width of the soft blend transition at mask edges, as a percentage "
+                        "of the image diagonal. Uses a guided filter to snap the feather to the original "
+                        "image's edge structures, producing clean, object-aware transitions. "
+                        "Higher values create a wider, softer blend — good for smooth subjects like skin "
+                        "or fabric where a hard edge would look artificial. "
+                        "Lower values produce a tighter, harder edge — useful for geometric subjects or "
+                        "when you need precise control and the edges are already well-detected. "
+                        "0 disables feathering entirely."
+                    ),
+                }),
+                "color_match_blend": ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": (
+                        "Corrects lighting and color tone differences between the original and generated "
+                        "images before compositing, using Reinhard color transfer on the background region. "
+                        "1.0 (default) fully matches the generated image's colors to the original — "
+                        "recommended when the AI model has shifted the overall brightness, white balance, "
+                        "or saturation compared to the source. "
+                        "Lower values partially blend the correction, preserving some of the generated "
+                        "image's own color grading. "
+                        "Set to 0.0 to disable color matching entirely — use this if the generated image's "
+                        "color shift is intentional (e.g. a day-to-night conversion)."
+                    ),
                 }),
                 "enable_debug": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Output debug visualization images.",
+                    "tooltip": (
+                        "Outputs a debug gallery image showing internal intermediate states: SIFT feature "
+                        "matches, alignment results, difference maps, flow visualization, and the detected "
+                        "change mask overlay. "
+                        "Turn ON to diagnose alignment failures, unexpected mask shapes, or blending "
+                        "artifacts — the gallery makes it easy to see exactly where the pipeline is "
+                        "succeeding or going wrong. "
+                        "Leave OFF during normal use to save memory and processing time."
+                    ),
                 }),
             },
             "optional": {
                 "custom_mask": ("MASK", {
                     "tooltip": (
-                        "When connected, skips internal change detection entirely. "
-                        "The supplied mask is used directly as the composite mask "
-                        "(feathering still applies). Useful for manual overrides or "
-                        "upstream segmentation results."
+                        "When connected, bypasses internal change detection entirely and uses this mask "
+                        "directly as the composite boundary. Feathering, grow, and fill_borders still apply. "
+                        "Use this when automatic detection is unreliable for your specific edit — for "
+                        "example, when using an upstream segmentation node, a hand-painted mask, or a "
+                        "subject that is too similar in color to the background to detect automatically. "
+                        "Leave disconnected to use the node's built-in detection pipeline."
                     ),
                 }),
             },
@@ -807,10 +1084,10 @@ class KleinEditComposite:
     OUTPUT_NODE   = True
 
     def run(self, original_image, generated_image,
-            delta_e_threshold=-1.0, grow_mask_pct=0.0, feather_pct=2.0,
+            delta_e_threshold=-1.0, grow_mask_pct=0.0, feather_pct=2.0, color_match_blend=1.0,
             flow_quality="medium", occlusion_threshold=-1.0,
             close_radius_pct=0.5, noise_removal_pct=0.0, max_islands=0,
-            fill_holes=False, use_occlusion=False, enable_debug=False, custom_mask=None):
+            fill_holes=False, fill_borders=True, use_occlusion=False, enable_debug=False, custom_mask=None):
 
         orig_np = original_image[0].cpu().float().numpy()
         gen_np  = generated_image[0].cpu().float().numpy()
@@ -828,7 +1105,6 @@ class KleinEditComposite:
         close_px         = _pct_to_px(close_radius_pct, diag)
         noise_removal_px = _pct_to_px(noise_removal_pct, diag)
 
-        # Unpack optional custom mask (ComfyUI passes MASK as [B, H, W])
         custom_mask_np = None
         if custom_mask is not None:
             custom_mask_np = custom_mask[0].cpu().float().numpy()
@@ -847,13 +1123,15 @@ class KleinEditComposite:
             max_islands         = max_islands,
             fill_holes          = fill_holes,
             use_occlusion       = use_occlusion,
+            fill_borders        = fill_borders,
             feather_px          = feather_px,
+            color_match_blend   = color_match_blend,
             custom_mask         = custom_mask_np,
             debug               = enable_debug,
         )
 
-        report_lines = [
-            "=== Klein Edit Composite v6.1 (Debug Edition) ===",
+        report_lines =[
+            "=== Klein Edit Composite===",
             f"Resolution:       {stats['resolution']}  (diag {stats['diagonal_px']}px)",
             "",
         ]
@@ -862,7 +1140,7 @@ class KleinEditComposite:
             report_lines.append("Mask source:      CUSTOM (internal detection bypassed)")
         elif stats.get("pass2_inliers", 0) > 0:
             report_lines.append("Alignment:        Two-Pass Success! Background rigidly locked.")
-            report_lines.append(f"Pass 1 Inliers:   {stats['pass1_inliers']} (Blind)")
+            report_lines.append(f"Pass 1 Inliers:   {stats['pass1_inliers']} (Blind SIFT+MAGSAC)")
             report_lines.append(f"Pass 2 Inliers:   {stats['pass2_inliers']} (Masked background only)")
         else:
             report_lines.append(
@@ -886,30 +1164,31 @@ class KleinEditComposite:
         report_lines.append("")
 
         if "auto_delta_e" in stats:
-            report_lines.append(f"ΔE threshold:     AUTO → {stats['auto_delta_e']:.1f}")
+            report_lines.append(f"Diff Threshold:   AUTO (MAD) → {stats['auto_delta_e']:.1f}")
         else:
-            report_lines.append(f"ΔE threshold:     {delta_e_threshold:.1f}")
+            report_lines.append(f"Diff Threshold:   {delta_e_threshold:.1f}")
 
         if "auto_occlusion" in stats:
-            report_lines.append(f"Occlusion thresh: AUTO → {stats['auto_occlusion']:.1f}")
+            report_lines.append(f"Occlusion Thresh: AUTO (MAD) → {stats['auto_occlusion']:.1f}")
         else:
-            report_lines.append(f"Occlusion thresh: {occlusion_threshold:.1f}")
+            report_lines.append(f"Occlusion Thresh: {occlusion_threshold:.1f}")
 
-        report_lines += [
+        report_lines +=[
             f"Grow mask:        {grow_mask_pct:+.1f}% → {grow_px:+d}px",
             f"Noise removal:    {noise_removal_pct:.2f}% → {noise_removal_px}px (opening radius)",
             f"Max islands:      {max_islands if max_islands > 0 else 'disabled'}",
             f"Fill holes:       {'yes' if fill_holes else 'no'}",
+            f"Fill borders:     {'yes (mirrored pixels)' if fill_borders else 'no (show original)'}",
             f"Occlusion:        {'enabled' if use_occlusion else 'disabled'}",
-            f"Feather:          {feather_pct:.1f}% → {feather_px:.0f}px",
+            f"Feather (Guided): {feather_pct:.1f}% → {feather_px:.0f}px",
+            f"Color Match:      {color_match_blend * 100:.0f}% {'(Applied)' if stats.get('color_match_applied') else '(Skipped)'}",
             f"Flow quality:     {flow_quality}",
             "",
             f"Changed region:   {stats['changed_pct']:.1f}% of image",
             f"Flow mean shift:  {stats['flow_mean_px']:.2f}px  (Residual after Homography)",
-            f"Median ΔE:        {stats['median_de']:.2f}",
+            f"Median Diff:      {stats['median_de']:.2f}",
         ]
 
-        # Build debug gallery
         debug_gallery = None
         if enable_debug:
             if not debug_images:
@@ -920,20 +1199,20 @@ class KleinEditComposite:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 1)
                 debug_gallery = torch.from_numpy(warning.astype(np.float32) / 255.0).unsqueeze(0)
             else:
-                order = [
+                order =[
                     ('custom_mask_override',  'Custom Mask Override'),
                     ('pass1_sift_matches',     'SIFT Matches (Pass 1)'),
                     ('pass1_alignment',        'Pass 1 Alignment'),
-                    ('pass1_delta_e',          'Delta E (Pass 1)'),
+                    ('pass1_delta_e',          'Diff Map (Pass 1)'),
                     ('pass1_validity_overlay', 'Validity Mask (Red=Void)'),
                     ('final_alignment',        'Final Alignment'),
-                    ('final_delta_e',          'Delta E (Final)'),
+                    ('final_delta_e',          'Diff Map (Final)'),
                     ('final_flow',             'Optical Flow'),
                     ('mask_overlay',           'Detected Changes'),
                     ('composite_breakdown',    'Original | Aligned | Result | Mask'),
                 ]
 
-                viz_images = []
+                viz_images =[]
                 for key, _label in order:
                     if key in debug_images and debug_images[key] is not None:
                         img = debug_images[key]
@@ -947,25 +1226,23 @@ class KleinEditComposite:
                     debug_gallery = torch.zeros((1, 512, 512, 3))
                 else:
                     target_h = 400
-                    rows = []
+                    rows =[]
 
                     for i in range(0, len(viz_images), 3):
                         row_imgs = viz_images[i:i+3]
-                        resized  = []
+                        resized  =[]
                         for img in row_imgs:
                             if img.shape[0] != target_h:
                                 scale = target_h / img.shape[0]
                                 img   = cv2.resize(img, (int(img.shape[1] * scale), target_h))
                             resized.append(img)
 
-                        # Pad to 3 columns with gray if needed
                         while len(resized) < 3:
                             h, w = resized[0].shape[:2] if resized else (target_h, target_h)
                             resized.append(np.full((h, w, 3), 64, dtype=np.uint8))
 
                         rows.append(np.hstack(resized))
 
-                    # Equalise row widths before stacking
                     if len(rows) > 1:
                         max_width = max(row.shape[1] for row in rows)
                         rows = [
