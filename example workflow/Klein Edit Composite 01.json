@@ -2,7 +2,7 @@
   "id": "92112d97-bb64-4b44-86f2-ea5691ef8f6e",
   "revision": 0,
   "last_node_id": 232,
-  "last_link_id": 530,
+  "last_link_id": 531,
   "nodes": [
     {
       "id": 105,
@@ -141,7 +141,7 @@
         106
       ],
       "flags": {},
-      "order": 10,
+      "order": 11,
       "mode": 0,
       "inputs": [
         {
@@ -196,7 +196,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 14,
+      "order": 12,
       "mode": 0,
       "inputs": [
         {
@@ -271,7 +271,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 12,
+      "order": 13,
       "mode": 0,
       "inputs": [
         {
@@ -353,7 +353,7 @@
         106
       ],
       "flags": {},
-      "order": 15,
+      "order": 16,
       "mode": 0,
       "inputs": [
         {
@@ -414,7 +414,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 16,
+      "order": 15,
       "mode": 0,
       "inputs": [
         {
@@ -582,7 +582,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 13,
+      "order": 14,
       "mode": 0,
       "inputs": [
         {
@@ -674,46 +674,6 @@
       "bgcolor": "#653"
     },
     {
-      "id": 148,
-      "type": "LoadImage",
-      "pos": [
-        -1280,
-        920
-      ],
-      "size": [
-        360,
-        360
-      ],
-      "flags": {},
-      "order": 5,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "IMAGE",
-          "type": "IMAGE",
-          "links": [
-            453
-          ]
-        },
-        {
-          "name": "MASK",
-          "type": "MASK",
-          "links": []
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.9.2",
-        "Node name for S&R": "LoadImage",
-        "image": "clipspace/clipspace-painted-masked-1773516433234.png [input]"
-      },
-      "widgets_values": [
-        "ComfyUI_07276_.png",
-        "image"
-      ]
-    },
-    {
       "id": 211,
       "type": "PrimitiveFloat",
       "pos": [
@@ -725,7 +685,7 @@
         58
       ],
       "flags": {},
-      "order": 6,
+      "order": 5,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -760,7 +720,7 @@
         360
       ],
       "flags": {},
-      "order": 7,
+      "order": 6,
       "mode": 4,
       "inputs": [],
       "outputs": [
@@ -799,7 +759,7 @@
         106
       ],
       "flags": {},
-      "order": 11,
+      "order": 10,
       "mode": 4,
       "inputs": [
         {
@@ -876,12 +836,12 @@
           {
             "name": "A",
             "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_ggoen_00041_.png&type=temp&subfolder=&rand=0.002913681112567623"
+            "url": "/api/view?filename=rgthree.compare._temp_ggoen_00045_.png&type=temp&subfolder=&rand=0.8196372994100026"
           },
           {
             "name": "B",
             "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_ggoen_00042_.png&type=temp&subfolder=&rand=0.32234470851122465"
+            "url": "/api/view?filename=rgthree.compare._temp_ggoen_00046_.png&type=temp&subfolder=&rand=0.7485453245981368"
           }
         ]
       ]
@@ -990,12 +950,12 @@
           {
             "name": "A",
             "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_nnfbv_00041_.png&type=temp&subfolder=&rand=0.49065296128700997"
+            "url": "/api/view?filename=rgthree.compare._temp_nnfbv_00045_.png&type=temp&subfolder=&rand=0.5693592261894773"
           },
           {
             "name": "B",
             "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_nnfbv_00042_.png&type=temp&subfolder=&rand=0.6246522027557322"
+            "url": "/api/view?filename=rgthree.compare._temp_nnfbv_00046_.png&type=temp&subfolder=&rand=0.6892914929021775"
           }
         ]
       ]
@@ -1012,7 +972,7 @@
         82
       ],
       "flags": {},
-      "order": 8,
+      "order": 7,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1037,7 +997,7 @@
         "secondTabWidth": 65
       },
       "widgets_values": [
-        760337408260183,
+        645045229064312,
         "randomize"
       ]
     },
@@ -1071,6 +1031,46 @@
       "widgets_values": []
     },
     {
+      "id": 148,
+      "type": "LoadImage",
+      "pos": [
+        -1280,
+        920
+      ],
+      "size": [
+        360,
+        360
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            453
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.9.2",
+        "Node name for S&R": "LoadImage",
+        "image": "clipspace/clipspace-painted-masked-1773598217856.png [input]"
+      },
+      "widgets_values": [
+        "clipspace/clipspace-painted-masked-1773598217856.png [input]",
+        "image"
+      ]
+    },
+    {
       "id": 162,
       "type": "Text Multiline",
       "pos": [
@@ -1100,7 +1100,7 @@
         "Node name for S&R": "Text Multiline"
       },
       "widgets_values": [
-        "she's wearing riot gear"
+        "she's wearing headphones"
       ]
     },
     {
@@ -1459,10 +1459,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.5209868481924381,
+      "scale": 0.9229599817706465,
       "offset": [
-        2374.3757929453445,
-        -245.05917696864907
+        1686.6177230215283,
+        -790.2072480071257
       ]
     },
     "frontendVersion": "1.36.14",
