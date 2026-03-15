@@ -1,8 +1,7 @@
-# Klein Edit Composite
+## Klein Edit Composite — ComfyUI Custom Node
 
-A ComfyUI custom node that composites a Klein edit back onto the original image using DIS optical flow change detection. Eliminates color drift by restoring original pixels everywhere Klein didn't intentionally change anything.
-
-<img width="337" height="367" alt="image" src="https://github.com/user-attachments/assets/0705ca6b-68e2-432a-ba97-4aacb8a0d47e" />
+### What it does
+This is a **ComfyUI node** that intelligently composites a generated (AI-edited) image back onto an original image. Its core job is to detect *only what actually changed* between the two images and blend the generated content in cleanly — preserving the original background wherever it wasn't meaningfully altered.
 
 Series of edits without the node:
 
@@ -12,21 +11,25 @@ Series of edits with the node:
 
 ![with-node](https://github.com/user-attachments/assets/6e29809a-e248-4c3f-a0e2-32aea222790a)
 
-## How It Works
 
-The node uses bidirectional DIS optical flow to align the original and generated images, then detects which pixels genuinely changed using perceptual color distance (ΔE) in LAB color space. Only those changed pixels are taken from the generated image — everything else is restored from the original, preserving its color fidelity.
-A global rigid alignment step calculates a single camera-shift correction from unchanged background pixels, then applies it uniformly to the entire generated image. This fixes AI-induced background drift without introducing seam distortion around the edit boundary.
-Several refinements prevent false positives:
+### How it works
 
--A pre-blur step absorbs sub-pixel misalignment halos
+The pipeline runs roughly in this order:
 
--Luma weighting reduces sensitivity to AI-induced global contrast shifts
+1. **Alignment (Two-Pass SIFT + Homography):** Uses SIFT feature matching with CLAHE preprocessing and MAGSAC outlier rejection to correct any camera/perspective shift between the original and generated image. A second pass refines alignment using only background pixels.
 
--Smoothing of the difference map before thresholding eliminates speckle noise
+2. **Optical Flow (DIS):** After homography correction, dense optical flow catches any remaining sub-pixel or local motion between the two images.
 
--Morphological closing fills holes in the change mask
+3. **Difference Detection:** Computes a hybrid diff map combining perceptual color difference (Delta E in LAB color space) and structural difference (Sobel gradient magnitude). This makes it robust to minor lighting shifts while still catching real content changes.
 
--Small isolated blobs are removed automatically
+4. **Mask Refinement:** The raw change mask is cleaned up via noise removal (opening-by-reconstruction), hole filling, island pruning, border bleed, and optional grow/shrink. An optional occlusion mask (forward-backward flow consistency check) can also be incorporated.
 
+5. **Color Matching:** Optionally applies Reinhard color transfer (in LAB space) to match the generated image's lighting/color to the original, using only background pixels for statistics.
 
-## NOTE: AI coded. I am not a developer.
+6. **Compositing:** The final mask is feathered using a guided filter (edge-aware smoothing) and used to alpha-blend the generated image over the original.
+
+### Outputs
+- `composited_image` — the final blended result
+- `change_mask` — the detected change region
+- `report` — a text summary of all parameters and statistics
+- `debug_gallery` — optional visual breakdown of intermediate steps (SIFT matches, flow, diff maps, etc.)
