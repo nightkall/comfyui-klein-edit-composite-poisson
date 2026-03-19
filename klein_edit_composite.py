@@ -545,6 +545,44 @@ def _auto_threshold_mad(diff_map: np.ndarray, valid_mask: np.ndarray = None,
     return float(np.clip(threshold, min_t, max_t))
 
 
+def _local_threshold_map(diff_map: np.ndarray, valid_mask: np.ndarray,
+                         diag: float, k: float = 6.0,
+                         min_t: float = 3.0, max_t: float = 60.0) -> np.ndarray:
+    """
+    Computes a per-pixel adaptive threshold map using local MAD statistics.
+
+    On smooth surfaces gradients are near zero so the global MAD threshold (driven
+    by high-activity regions elsewhere) is too coarse to detect subtle changes.
+    A large local window captures the neighbourhood statistics instead, producing a
+    lower threshold in flat/smooth regions while leaving textured regions unaffected.
+
+    Window size is set to ~12.5% of the image diagonal — large enough to gather
+    robust statistics but small enough to stay local.
+    """
+    # Window radius ~6% of diagonal, must be odd
+    r = max(15, int(round(diag * 0.06)))
+    if r % 2 == 0:
+        r += 1
+    ksize = (r, r)
+
+    d = diff_map.astype(np.float32)
+
+    # Local mean via box filter
+    local_mean = cv2.blur(d, ksize)
+    # Local MAD approximated as: blur(|d - local_mean|)
+    local_mad  = cv2.blur(np.abs(d - local_mean), ksize)
+    local_mad  = np.maximum(local_mad, 0.5)  # same noise floor as global version
+
+    local_thresh = local_mean + k * local_mad
+    local_thresh = np.clip(local_thresh, min_t, max_t).astype(np.float32)
+
+    # Only apply inside valid region; outside just use max_t (won't be composited anyway)
+    if valid_mask is not None:
+        local_thresh = np.where(valid_mask > 0.5, local_thresh, max_t)
+
+    return local_thresh
+
+
 # ---------------------------------------------------------------------------
 # Core Composite Logic
 # ---------------------------------------------------------------------------
@@ -571,6 +609,7 @@ def _composite(original_np: np.ndarray,
                use_occlusion: bool = False,
                fill_borders: bool = True,
                custom_mask: np.ndarray = None,
+               custom_mask_mode: str = "replace",
                debug: bool = False) -> tuple:
 
     H, W = original_np.shape[:2]
@@ -589,9 +628,9 @@ def _composite(original_np: np.ndarray,
     auto_report = {}
 
     # ------------------------------------------------------------------
-    # Custom mask override: bypass internal change detection entirely
+    # Custom mask override (replace mode): bypass internal detection entirely
     # ------------------------------------------------------------------
-    if custom_mask is not None:
+    if custom_mask is not None and custom_mask_mode == "replace":
         if debug:
             debug_images['custom_mask_override'] = np.stack([custom_mask] * 3, axis=-1)
             debug_images['mask_overlay'] = original_np.copy()
@@ -617,12 +656,7 @@ def _composite(original_np: np.ndarray,
                 dist = cv2.distanceTransform(inv_mask, cv2.DIST_L2, 5)
                 fade_dist = feather_px * 2.5
                 t = np.clip(1.0 - (dist / fade_dist), 0.0, 1.0)
-                base_mask = (t * t * (3.0 - 2.0 * t)).astype(np.float32)
-                
-                # Guided Filter snaps mask directly to edges of the original image
-                gray_guide = cv2.cvtColor(orig_u8, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
-                composite_mask = _fast_guided_filter(gray_guide, base_mask, max(2, int(feather_px)), eps=1e-3)
-                composite_mask = np.clip(composite_mask, 0.0, 1.0)
+                composite_mask = (t * t * (3.0 - 2.0 * t)).astype(np.float32)
             else:
                 composite_mask = sharp_mask
         else:
@@ -714,7 +748,10 @@ def _composite(original_np: np.ndarray,
     delta_e_1_raw = blend_w_1 * diff_1_direct + (1.0 - blend_w_1) * diff_1_warped
     delta_e_1 = cv2.GaussianBlur(delta_e_1_raw, (sk, sk), 0)
 
-    coarse_mask = (delta_e_1 > de_thresh).astype(np.float32)
+    # Local adaptive threshold — more sensitive in smooth/flat regions
+    local_thresh_1 = _local_threshold_map(delta_e_1, valid_1, diag)
+    thresh_map_1   = np.minimum(de_thresh, local_thresh_1)
+    coarse_mask = (delta_e_1 > thresh_map_1).astype(np.float32)
 
     if use_occlusion:
         occ_thresh = occlusion_threshold if occlusion_threshold >= 0 else _auto_threshold_mad(_fwd_bwd_error(flow_fwd_1, flow_bwd_1), valid_1, k=5.0, min_t=1.0, max_t=30.0)
@@ -773,7 +810,10 @@ def _composite(original_np: np.ndarray,
     delta_e_2_raw = blend_w_2 * diff_2_direct + (1.0 - blend_w_2) * diff_2_warped
     delta_e_2 = cv2.GaussianBlur(delta_e_2_raw, (sk, sk), 0)
 
-    sharp_mask = (delta_e_2 > de_thresh).astype(np.float32)
+    # Local adaptive threshold — more sensitive in smooth/flat regions
+    local_thresh_2 = _local_threshold_map(delta_e_2, valid_2, diag)
+    thresh_map_2   = np.minimum(de_thresh, local_thresh_2)
+    sharp_mask = (delta_e_2 > thresh_map_2).astype(np.float32)
     
     if use_occlusion:
         sharp_mask = np.maximum(sharp_mask, _occlusion_mask(flow_fwd_2, flow_bwd_2, occ_thresh))
@@ -805,6 +845,20 @@ def _composite(original_np: np.ndarray,
         sharp_mask = _fill_holes(sharp_mask)
         sharp_mask *= valid_2
 
+    # ------------------------------------------------------------------
+    # Custom mask combination (add / subtract modes)
+    # ------------------------------------------------------------------
+    if custom_mask is not None and custom_mask_mode in ("add", "subtract"):
+        cm = np.clip(custom_mask, 0.0, 1.0)
+        if custom_mask_mode == "add":
+            sharp_mask = np.clip(sharp_mask + cm, 0.0, 1.0)
+        else:  # subtract
+            sharp_mask = np.clip(sharp_mask - cm, 0.0, 1.0)
+        sharp_mask *= valid_2
+        if debug:
+            debug_images['custom_mask_override'] = np.stack([cm] * 3, axis=-1)
+            auto_report['custom_mask_mode'] = custom_mask_mode
+
     # Extrapolate mask into invalid regions (shrinkage voids)
     if fill_borders:
         sharp_mask = _bleed_mask(sharp_mask, valid_2)
@@ -816,12 +870,7 @@ def _composite(original_np: np.ndarray,
             dist      = cv2.distanceTransform(inv_mask, cv2.DIST_L2, 5)
             fade_dist = feather_px * 2.5
             t         = np.clip(1.0 - (dist / fade_dist), 0.0, 1.0)
-            base_mask = (t * t * (3.0 - 2.0 * t)).astype(np.float32)
-            
-            # Snap mask seamlessly to internal edge structures
-            gray_guide = cv2.cvtColor(orig_u8, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
-            composite_mask = _fast_guided_filter(gray_guide, base_mask, max(2, int(feather_px)), eps=1e-3)
-            composite_mask = np.clip(composite_mask, 0.0, 1.0)
+            composite_mask = (t * t * (3.0 - 2.0 * t)).astype(np.float32)
         else:
             composite_mask = sharp_mask
     else:
@@ -899,8 +948,8 @@ class KleinEditComposite:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "original_image":  ("IMAGE",),
                 "generated_image": ("IMAGE",),
+                "original_image":  ("IMAGE",),
                 # --- Detection ---
                 "delta_e_threshold": ("FLOAT", {
                     "default": -1.0, "min": -1.0, "max": 100.0, "step": 1.0,
@@ -1028,8 +1077,9 @@ class KleinEditComposite:
                     "default": 2.0, "min": 0.0, "max": 10.0, "step": 0.25,
                     "tooltip": (
                         "Controls the width of the soft blend transition at mask edges, as a percentage "
-                        "of the image diagonal. Uses a guided filter to snap the feather to the original "
-                        "image's edge structures, producing clean, object-aware transitions. "
+                        "of the image diagonal. Applies a smooth distance-based falloff from the mask "
+                        "boundary, producing a clean gradual transition between the composited and "
+                        "original regions. "
                         "Higher values create a wider, softer blend — good for smooth subjects like skin "
                         "or fabric where a hard edge would look artificial. "
                         "Lower values produce a tighter, harder edge — useful for geometric subjects or "
@@ -1051,6 +1101,29 @@ class KleinEditComposite:
                         "color shift is intentional (e.g. a day-to-night conversion)."
                     ),
                 }),
+            },
+            "optional": {
+                "custom_mask": ("MASK", {
+                    "tooltip": (
+                        "An optional mask to modify or replace the auto-detected composite boundary. "
+                        "Behaviour is controlled by the custom_mask_mode setting below. "
+                        "Feathering, grow, and fill_borders always apply after the mask is combined. "
+                        "Leave disconnected to use the node's built-in detection pipeline."
+                    ),
+                }),
+                "custom_mask_mode": (["replace", "add", "subtract"], {
+                    "default": "replace",
+                    "tooltip": (
+                        "Controls how the custom_mask is combined with the auto-detected mask.\n"
+                        "replace: skips internal detection entirely and uses only the custom mask "
+                        "(original behaviour — fastest, use when auto-detection is unreliable).\n"
+                        "add: runs the full detection pipeline, then unions the custom mask on top — "
+                        "useful for forcing extra regions into the composite that detection missed.\n"
+                        "subtract: runs the full detection pipeline, then removes the custom mask area "
+                        "from the result — useful for protecting specific regions (e.g. background "
+                        "objects that are incorrectly flagged as changed) from being composited."
+                    ),
+                }),
                 "enable_debug": ("BOOLEAN", {
                     "default": False,
                     "tooltip": (
@@ -1064,18 +1137,6 @@ class KleinEditComposite:
                     ),
                 }),
             },
-            "optional": {
-                "custom_mask": ("MASK", {
-                    "tooltip": (
-                        "When connected, bypasses internal change detection entirely and uses this mask "
-                        "directly as the composite boundary. Feathering, grow, and fill_borders still apply. "
-                        "Use this when automatic detection is unreliable for your specific edit — for "
-                        "example, when using an upstream segmentation node, a hand-painted mask, or a "
-                        "subject that is too similar in color to the background to detect automatically. "
-                        "Leave disconnected to use the node's built-in detection pipeline."
-                    ),
-                }),
-            },
         }
 
     RETURN_TYPES  = ("IMAGE", "MASK", "STRING", "IMAGE")
@@ -1083,11 +1144,12 @@ class KleinEditComposite:
     FUNCTION      = "run"
     OUTPUT_NODE   = True
 
-    def run(self, original_image, generated_image,
+    def run(self, generated_image, original_image,
             delta_e_threshold=-1.0, grow_mask_pct=0.0, feather_pct=2.0, color_match_blend=1.0,
             flow_quality="medium", occlusion_threshold=-1.0,
             close_radius_pct=0.5, noise_removal_pct=0.0, max_islands=0,
-            fill_holes=False, fill_borders=True, use_occlusion=False, enable_debug=False, custom_mask=None):
+            fill_holes=False, fill_borders=True, use_occlusion=False, enable_debug=False,
+            custom_mask=None, custom_mask_mode="replace"):
 
         orig_np = original_image[0].cpu().float().numpy()
         gen_np  = generated_image[0].cpu().float().numpy()
@@ -1127,6 +1189,7 @@ class KleinEditComposite:
             feather_px          = feather_px,
             color_match_blend   = color_match_blend,
             custom_mask         = custom_mask_np,
+            custom_mask_mode    = custom_mask_mode,
             debug               = enable_debug,
         )
 
@@ -1137,7 +1200,10 @@ class KleinEditComposite:
         ]
 
         if stats.get("custom_mask"):
-            report_lines.append("Mask source:      CUSTOM (internal detection bypassed)")
+            report_lines.append("Mask source:      CUSTOM replace (internal detection bypassed)")
+        elif stats.get("custom_mask_mode"):
+            mode = stats["custom_mask_mode"]
+            report_lines.append(f"Mask source:      AUTO + custom {mode.upper()}")
         elif stats.get("pass2_inliers", 0) > 0:
             report_lines.append("Alignment:        Two-Pass Success! Background rigidly locked.")
             report_lines.append(f"Pass 1 Inliers:   {stats['pass1_inliers']} (Blind SIFT+MAGSAC)")
@@ -1180,7 +1246,7 @@ class KleinEditComposite:
             f"Fill holes:       {'yes' if fill_holes else 'no'}",
             f"Fill borders:     {'yes (mirrored pixels)' if fill_borders else 'no (show original)'}",
             f"Occlusion:        {'enabled' if use_occlusion else 'disabled'}",
-            f"Feather (Guided): {feather_pct:.1f}% → {feather_px:.0f}px",
+            f"Feather:          {feather_pct:.1f}% → {feather_px:.0f}px",
             f"Color Match:      {color_match_blend * 100:.0f}% {'(Applied)' if stats.get('color_match_applied') else '(Skipped)'}",
             f"Flow quality:     {flow_quality}",
             "",
