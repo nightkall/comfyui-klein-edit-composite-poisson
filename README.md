@@ -1,5 +1,7 @@
 ## Klein Edit Composite — ComfyUI Custom Node
 
+![Node Image](assets/node-image.jpg)
+
 ### What it does
 This is a **ComfyUI node** that intelligently composites a generated (AI-edited) image back onto an original image. Its core job is to detect *only what actually changed* between the two images and blend the generated content in cleanly — preserving the original background wherever it wasn't meaningfully altered.
 
@@ -33,3 +35,5 @@ The pipeline runs roughly in this order:
 - `change_mask` — the detected change region
 - `report` — a text summary of all parameters and statistics
 - `debug_gallery` — optional visual breakdown of intermediate steps (SIFT matches, flow, diff maps, etc.)
+
+## AI coded, I am not a developer.
