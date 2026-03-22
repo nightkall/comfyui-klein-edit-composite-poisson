@@ -473,16 +473,24 @@ def _grow_mask(mask: np.ndarray, grow_px: int) -> np.ndarray:
 
 
 def _open_mask(mask: np.ndarray, radius_px: int) -> np.ndarray:
-    """Remove speckles via opening-by-reconstruction."""
+    """Remove speckles via opening-by-reconstruction.
+
+    Standard opening (erode then dilate) kills isolated noise but also rounds off
+    sharp points and thin protrusions on real regions.  Opening by reconstruction
+    fixes this: after erosion the seed is geodesically dilated — it can only grow
+    back within the bounds of the original mask.  Any region that survived erosion
+    is fully restored to its original shape; any region that was completely erased
+    (i.e. genuine speckle) cannot recover and stays gone.
+    """
     if radius_px <= 0:
         return mask
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius_px * 2 + 1, radius_px * 2 + 1))
-    marker = cv2.erode(mask.astype(np.uint8), k).astype(np.float32)
-    orig   = mask.astype(np.float32)
-    k3     = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    marker = cv2.erode(mask.astype(np.uint8), k).astype(np.float32)  # seed: speckles are gone
+    orig   = mask.astype(np.float32)                                   # ceiling: can't grow beyond original
+    k3     = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))     # unit dilation step
     while True:
-        expanded = np.minimum(cv2.dilate(marker, k3), orig)
-        if np.array_equal(expanded, marker):
+        expanded = np.minimum(cv2.dilate(marker, k3), orig)  # dilate then clip to original
+        if np.array_equal(expanded, marker):                  # converged — no further change
             break
         marker = expanded
     return marker
@@ -505,7 +513,10 @@ def _fill_holes(mask: np.ndarray) -> np.ndarray:
 
 
 def _bleed_mask(mask: np.ndarray, valid_mask: np.ndarray) -> np.ndarray:
-    """Extrapolates the mask into invalid border regions."""
+    """
+    Extrapolates the mask into invalid border regions (where the generated image shrunk).
+    This prevents the original image from showing through as a thin frame around edits.
+    """
     invalid = (valid_mask < 0.5).astype(np.uint8)
     if invalid.max() == 0:
         return mask
@@ -518,6 +529,7 @@ def _bleed_mask(mask: np.ndarray, valid_mask: np.ndarray) -> np.ndarray:
         
     bled_mask = mask.copy()
     remaining = max_depth
+    # Iterative dilation guarantees we reach the edge without massive slow kernels
     while remaining > 0:
         step = min(remaining, 60)
         k_size = step * 2 + 1
@@ -525,6 +537,7 @@ def _bleed_mask(mask: np.ndarray, valid_mask: np.ndarray) -> np.ndarray:
         bled_mask = cv2.dilate(bled_mask, k)
         remaining -= step
         
+    # Apply the bled values ONLY in the void regions
     return np.where(valid_mask > 0.5, mask, bled_mask).astype(np.float32)
 
 
@@ -545,7 +558,7 @@ def _auto_threshold_mad(diff_map: np.ndarray, valid_mask: np.ndarray = None,
         
     med = float(np.median(sample))
     mad = float(np.median(np.abs(sample - med)))
-    mad = max(mad, 0.5)
+    mad = max(mad, 0.5)  # Enforce minimum noise floor
     
     threshold = med + k * mad
     return float(np.clip(threshold, min_t, max_t))
@@ -554,20 +567,35 @@ def _auto_threshold_mad(diff_map: np.ndarray, valid_mask: np.ndarray = None,
 def _local_threshold_map(diff_map: np.ndarray, valid_mask: np.ndarray,
                          diag: float, k: float = 6.0,
                          min_t: float = 3.0, max_t: float = 60.0) -> np.ndarray:
-    """Computes a per-pixel adaptive threshold map using local MAD statistics."""
+    """
+    Computes a per-pixel adaptive threshold map using local MAD statistics.
+
+    On smooth surfaces gradients are near zero so the global MAD threshold (driven
+    by high-activity regions elsewhere) is too coarse to detect subtle changes.
+    A large local window captures the neighbourhood statistics instead, producing a
+    lower threshold in flat/smooth regions while leaving textured regions unaffected.
+
+    Window size is set to ~12.5% of the image diagonal — large enough to gather
+    robust statistics but small enough to stay local.
+    """
+    # Window radius ~6% of diagonal, must be odd
     r = max(15, int(round(diag * 0.06)))
     if r % 2 == 0:
         r += 1
     ksize = (r, r)
 
     d = diff_map.astype(np.float32)
+
+    # Local mean via box filter
     local_mean = cv2.blur(d, ksize)
+    # Local MAD approximated as: blur(|d - local_mean|)
     local_mad  = cv2.blur(np.abs(d - local_mean), ksize)
-    local_mad  = np.maximum(local_mad, 0.5)
+    local_mad  = np.maximum(local_mad, 0.5)  # same noise floor as global version
 
     local_thresh = local_mean + k * local_mad
     local_thresh = np.clip(local_thresh, min_t, max_t).astype(np.float32)
 
+    # Only apply inside valid region; outside just use max_t (won't be composited anyway)
     if valid_mask is not None:
         local_thresh = np.where(valid_mask > 0.5, local_thresh, max_t)
 
@@ -739,10 +767,12 @@ def _composite(original_np: np.ndarray,
 
     de_thresh = delta_e_threshold if delta_e_threshold >= 0 else _auto_threshold_mad(diff_1_direct, valid_1)
 
+    # Blend: direct diff signals strongly inside the edit, warped diff is cleaner in the background
     blend_w_1 = np.clip(diff_1_direct / (de_thresh + 1e-6), 0.0, 1.0)
     delta_e_1_raw = blend_w_1 * diff_1_direct + (1.0 - blend_w_1) * diff_1_warped
     delta_e_1 = cv2.GaussianBlur(delta_e_1_raw, (sk, sk), 0)
 
+    # Local adaptive threshold — more sensitive in smooth/flat regions
     local_thresh_1 = _local_threshold_map(delta_e_1, valid_1, diag)
     thresh_map_1   = np.minimum(de_thresh, local_thresh_1)
     coarse_mask = (delta_e_1 > thresh_map_1).astype(np.float32)
@@ -804,6 +834,7 @@ def _composite(original_np: np.ndarray,
     delta_e_2_raw = blend_w_2 * diff_2_direct + (1.0 - blend_w_2) * diff_2_warped
     delta_e_2 = cv2.GaussianBlur(delta_e_2_raw, (sk, sk), 0)
 
+    # Local adaptive threshold — more sensitive in smooth/flat regions
     local_thresh_2 = _local_threshold_map(delta_e_2, valid_2, diag)
     thresh_map_2   = np.minimum(de_thresh, local_thresh_2)
     sharp_mask = (delta_e_2 > thresh_map_2).astype(np.float32)
@@ -1338,4 +1369,4 @@ class KleinEditComposite:
 
 
 NODE_CLASS_MAPPINGS      = {"KleinEditComposite": KleinEditComposite}
-NODE_DISPLAY_NAME_MAPPINGS = {"KleinEditComposite": "Klein Edit Composite (Poisson Blending)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"KleinEditComposite": "Klein Edit Composite"}
