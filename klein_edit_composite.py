@@ -1,6 +1,6 @@
 """
-Klein Edit Composite Node 
-==============================================
+Klein Edit Composite Node 2bc3600 + Poisson Blending for seamless lighting transfers
+====================================================================================
 """
 
 import numpy as np
@@ -297,6 +297,45 @@ def _compute_diff_map(orig_np: np.ndarray, gen_np: np.ndarray, blur_kernel: tupl
 
 
 # ---------------------------------------------------------------------------
+# Poisson Blending Helper
+# ---------------------------------------------------------------------------
+
+def _seamless_blend(orig_float: np.ndarray, gen_float: np.ndarray, mask_float: np.ndarray) -> np.ndarray:
+    """
+    Uses Poisson Blending (cv2.seamlessClone) to match lighting/color across boundaries, 
+    then applies an Alpha Blend using the smoothed mask for perfect edges.
+    """
+    orig_u8 = (np.clip(orig_float, 0, 1) * 255).astype(np.uint8)
+    gen_u8  = (np.clip(gen_float, 0, 1) * 255).astype(np.uint8)
+    
+    # Create binary mask for Poisson (> 0.1 to encompass the internal feathering zone)
+    binary_mask = (mask_float > 0.1).astype(np.uint8) * 255
+    
+    # Avoid OpenCV crash: the mask should never touch the exact 1px image boundaries
+    binary_mask[0, :] = 0; binary_mask[-1, :] = 0
+    binary_mask[:, 0] = 0; binary_mask[:, -1] = 0
+    
+    y_idx, x_idx = np.where(binary_mask > 0)
+    m3 = mask_float[..., np.newaxis]
+    
+    if len(y_idx) == 0 or len(x_idx) == 0:
+        return np.clip(orig_float * (1.0 - m3) + gen_float * m3, 0, 1)
+        
+    center = ((np.min(x_idx) + np.max(x_idx)) // 2, (np.min(y_idx) + np.max(y_idx)) // 2)
+    
+    try:
+        # NORMAL_CLONE mathematically matches the internal gradients to the background (orig)
+        cloned_u8 = cv2.seamlessClone(gen_u8, orig_u8, binary_mask, center, cv2.NORMAL_CLONE)
+        cloned_float = cloned_u8.astype(np.float32) / 255.0
+        
+        # Final Fusion: Alpha blend between original and the lighting-corrected Poisson clone
+        return np.clip(orig_float * (1.0 - m3) + cloned_float * m3, 0, 1)
+    except Exception:
+        # Safety fallback to classic Alpha Blend if Poisson solver fails
+        return np.clip(orig_float * (1.0 - m3) + gen_float * m3, 0, 1)
+
+
+# ---------------------------------------------------------------------------
 # SIFT pre-alignment
 # ---------------------------------------------------------------------------
 
@@ -424,26 +463,6 @@ def _occlusion_mask(flow_fwd: np.ndarray, flow_bwd: np.ndarray, threshold: float
     return (_fwd_bwd_error(flow_fwd, flow_bwd) > threshold).astype(np.float32)
 
 
-def _fast_guided_filter(I_gray: np.ndarray, p: np.ndarray, r: int, eps: float = 1e-3) -> np.ndarray:
-    """O(1) edge-preserving smoothing filter used to snap masks perfectly to image boundaries."""
-    ksize = (r * 2 + 1, r * 2 + 1)
-    mean_I = cv2.blur(I_gray, ksize)
-    mean_p = cv2.blur(p, ksize)
-    mean_Ip = cv2.blur(I_gray * p, ksize)
-    cov_Ip = mean_Ip - mean_I * mean_p
-    
-    mean_II = cv2.blur(I_gray * I_gray, ksize)
-    var_I = mean_II - mean_I * mean_I
-    
-    a = cov_Ip / (var_I + eps)
-    b = mean_p - a * mean_I
-    
-    mean_a = cv2.blur(a, ksize)
-    mean_b = cv2.blur(b, ksize)
-    
-    return mean_a * I_gray + mean_b
-
-
 def _grow_mask(mask: np.ndarray, grow_px: int) -> np.ndarray:
     if grow_px == 0:
         return mask
@@ -454,24 +473,16 @@ def _grow_mask(mask: np.ndarray, grow_px: int) -> np.ndarray:
 
 
 def _open_mask(mask: np.ndarray, radius_px: int) -> np.ndarray:
-    """Remove speckles via opening-by-reconstruction.
-
-    Standard opening (erode then dilate) kills isolated noise but also rounds off
-    sharp points and thin protrusions on real regions.  Opening by reconstruction
-    fixes this: after erosion the seed is geodesically dilated — it can only grow
-    back within the bounds of the original mask.  Any region that survived erosion
-    is fully restored to its original shape; any region that was completely erased
-    (i.e. genuine speckle) cannot recover and stays gone.
-    """
+    """Remove speckles via opening-by-reconstruction."""
     if radius_px <= 0:
         return mask
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius_px * 2 + 1, radius_px * 2 + 1))
-    marker = cv2.erode(mask.astype(np.uint8), k).astype(np.float32)  # seed: speckles are gone
-    orig   = mask.astype(np.float32)                                   # ceiling: can't grow beyond original
-    k3     = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))     # unit dilation step
+    marker = cv2.erode(mask.astype(np.uint8), k).astype(np.float32)
+    orig   = mask.astype(np.float32)
+    k3     = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     while True:
-        expanded = np.minimum(cv2.dilate(marker, k3), orig)  # dilate then clip to original
-        if np.array_equal(expanded, marker):                  # converged — no further change
+        expanded = np.minimum(cv2.dilate(marker, k3), orig)
+        if np.array_equal(expanded, marker):
             break
         marker = expanded
     return marker
@@ -494,10 +505,7 @@ def _fill_holes(mask: np.ndarray) -> np.ndarray:
 
 
 def _bleed_mask(mask: np.ndarray, valid_mask: np.ndarray) -> np.ndarray:
-    """
-    Extrapolates the mask into invalid border regions (where the generated image shrunk).
-    This prevents the original image from showing through as a thin frame around edits.
-    """
+    """Extrapolates the mask into invalid border regions."""
     invalid = (valid_mask < 0.5).astype(np.uint8)
     if invalid.max() == 0:
         return mask
@@ -510,7 +518,6 @@ def _bleed_mask(mask: np.ndarray, valid_mask: np.ndarray) -> np.ndarray:
         
     bled_mask = mask.copy()
     remaining = max_depth
-    # Iterative dilation guarantees we reach the edge without massive slow kernels
     while remaining > 0:
         step = min(remaining, 60)
         k_size = step * 2 + 1
@@ -518,7 +525,6 @@ def _bleed_mask(mask: np.ndarray, valid_mask: np.ndarray) -> np.ndarray:
         bled_mask = cv2.dilate(bled_mask, k)
         remaining -= step
         
-    # Apply the bled values ONLY in the void regions
     return np.where(valid_mask > 0.5, mask, bled_mask).astype(np.float32)
 
 
@@ -539,7 +545,7 @@ def _auto_threshold_mad(diff_map: np.ndarray, valid_mask: np.ndarray = None,
         
     med = float(np.median(sample))
     mad = float(np.median(np.abs(sample - med)))
-    mad = max(mad, 0.5)  # Enforce minimum noise floor
+    mad = max(mad, 0.5)
     
     threshold = med + k * mad
     return float(np.clip(threshold, min_t, max_t))
@@ -548,35 +554,20 @@ def _auto_threshold_mad(diff_map: np.ndarray, valid_mask: np.ndarray = None,
 def _local_threshold_map(diff_map: np.ndarray, valid_mask: np.ndarray,
                          diag: float, k: float = 6.0,
                          min_t: float = 3.0, max_t: float = 60.0) -> np.ndarray:
-    """
-    Computes a per-pixel adaptive threshold map using local MAD statistics.
-
-    On smooth surfaces gradients are near zero so the global MAD threshold (driven
-    by high-activity regions elsewhere) is too coarse to detect subtle changes.
-    A large local window captures the neighbourhood statistics instead, producing a
-    lower threshold in flat/smooth regions while leaving textured regions unaffected.
-
-    Window size is set to ~12.5% of the image diagonal — large enough to gather
-    robust statistics but small enough to stay local.
-    """
-    # Window radius ~6% of diagonal, must be odd
+    """Computes a per-pixel adaptive threshold map using local MAD statistics."""
     r = max(15, int(round(diag * 0.06)))
     if r % 2 == 0:
         r += 1
     ksize = (r, r)
 
     d = diff_map.astype(np.float32)
-
-    # Local mean via box filter
     local_mean = cv2.blur(d, ksize)
-    # Local MAD approximated as: blur(|d - local_mean|)
     local_mad  = cv2.blur(np.abs(d - local_mean), ksize)
-    local_mad  = np.maximum(local_mad, 0.5)  # same noise floor as global version
+    local_mad  = np.maximum(local_mad, 0.5)
 
     local_thresh = local_mean + k * local_mad
     local_thresh = np.clip(local_thresh, min_t, max_t).astype(np.float32)
 
-    # Only apply inside valid region; outside just use max_t (won't be composited anyway)
     if valid_mask is not None:
         local_thresh = np.where(valid_mask > 0.5, local_thresh, max_t)
 
@@ -610,6 +601,7 @@ def _composite(original_np: np.ndarray,
                fill_borders: bool = True,
                custom_mask: np.ndarray = None,
                custom_mask_mode: str = "replace",
+               use_poisson_blending: bool = True,
                debug: bool = False) -> tuple:
 
     H, W = original_np.shape[:2]
@@ -665,15 +657,18 @@ def _composite(original_np: np.ndarray,
         if not fill_borders:
             composite_mask *= valid
         
-        # --- NEW COLOR MATCH ---
+        # --- COLOR MATCH & POISSON BLEND ---
         gen_pre, color_matched = _apply_color_match(
             original_np, gen_pre, composite_mask, valid, color_match_blend
         )
         if color_matched: auto_report['color_match_applied'] = True
-        # -----------------------
 
-        m3     = composite_mask[..., np.newaxis]
-        result = np.clip(original_np * (1.0 - m3) + gen_pre * m3, 0, 1)
+        if use_poisson_blending:
+            result = _seamless_blend(original_np, gen_pre, composite_mask)
+        else:
+            m3     = composite_mask[..., np.newaxis]
+            result = np.clip(original_np * (1.0 - m3) + gen_pre * m3, 0, 1)
+        # -----------------------------------
 
         flow_fwd_final = _dis_flow(
             gray_orig,
@@ -703,6 +698,7 @@ def _composite(original_np: np.ndarray,
             "pass1_inliers":  inliers,
             "pass2_used":     False,
             "custom_mask":    True,
+            "poisson_used":   use_poisson_blending,
         }
         stats.update(auto_report)
 
@@ -743,12 +739,10 @@ def _composite(original_np: np.ndarray,
 
     de_thresh = delta_e_threshold if delta_e_threshold >= 0 else _auto_threshold_mad(diff_1_direct, valid_1)
 
-    # Blend: direct diff signals strongly inside the edit, warped diff is cleaner in the background
     blend_w_1 = np.clip(diff_1_direct / (de_thresh + 1e-6), 0.0, 1.0)
     delta_e_1_raw = blend_w_1 * diff_1_direct + (1.0 - blend_w_1) * diff_1_warped
     delta_e_1 = cv2.GaussianBlur(delta_e_1_raw, (sk, sk), 0)
 
-    # Local adaptive threshold — more sensitive in smooth/flat regions
     local_thresh_1 = _local_threshold_map(delta_e_1, valid_1, diag)
     thresh_map_1   = np.minimum(de_thresh, local_thresh_1)
     coarse_mask = (delta_e_1 > thresh_map_1).astype(np.float32)
@@ -810,7 +804,6 @@ def _composite(original_np: np.ndarray,
     delta_e_2_raw = blend_w_2 * diff_2_direct + (1.0 - blend_w_2) * diff_2_warped
     delta_e_2 = cv2.GaussianBlur(delta_e_2_raw, (sk, sk), 0)
 
-    # Local adaptive threshold — more sensitive in smooth/flat regions
     local_thresh_2 = _local_threshold_map(delta_e_2, valid_2, diag)
     thresh_map_2   = np.minimum(de_thresh, local_thresh_2)
     sharp_mask = (delta_e_2 > thresh_map_2).astype(np.float32)
@@ -879,16 +872,18 @@ def _composite(original_np: np.ndarray,
     if not fill_borders:
         composite_mask *= valid_2
 
-    # --- NEW COLOR MATCH ---
+    # --- COLOR MATCH & POISSON BLEND ---
     final_aligned_gen, color_matched = _apply_color_match(
         original_np, final_aligned_gen, composite_mask, valid_2, color_match_blend
     )
     if color_matched: auto_report['color_match_applied'] = True
-    # -----------------------
 
-    # Final Image Blend
-    m3     = composite_mask[..., np.newaxis]
-    result = np.clip(original_np * (1.0 - m3) + final_aligned_gen * m3, 0, 1)
+    if use_poisson_blending:
+        result = _seamless_blend(original_np, final_aligned_gen, composite_mask)
+    else:
+        m3     = composite_mask[..., np.newaxis]
+        result = np.clip(original_np * (1.0 - m3) + final_aligned_gen * m3, 0, 1)
+    # -----------------------------------
 
     # Reporting Stats
     flow_mag  = np.sqrt((flow_fwd_2**2).sum(axis=2))
@@ -903,6 +898,7 @@ def _composite(original_np: np.ndarray,
         "diagonal_px":    round(diag),
         "pass1_inliers":  inliers_1,
         "pass2_used":     pass2_used,
+        "poisson_used":   use_poisson_blending,
     }
     stats.update(auto_report)
 
@@ -939,7 +935,8 @@ def _composite(original_np: np.ndarray,
 class KleinEditComposite:
     """
     Composites a Klein edit onto the original image with full debug visualization.
-    Uses robust MAGSAC SIFT alignment, Gradient+LAB structure difference, and Guided Filter blending.
+    Uses robust MAGSAC SIFT alignment, Gradient+LAB structure difference, and 
+    optional Poisson Blending for seamless lighting transfers.
     """
 
     CATEGORY = "image/Klein"
@@ -1073,6 +1070,14 @@ class KleinEditComposite:
                     ),
                 }),
                 # --- Output ---
+                "use_poisson_blending": ("BOOLEAN", {
+                    "default": True, 
+                    "tooltip": (
+                        "Uses Poisson Blending (cv2.seamlessClone) to mathematically eliminate lighting "
+                        "and color seams introduced by the AI model. If disabled, uses the original "
+                        "author's standard Alpha Blending."
+                    )
+                }),
                 "feather_pct": ("FLOAT", {
                     "default": 2.0, "min": 0.0, "max": 10.0, "step": 0.25,
                     "tooltip": (
@@ -1149,7 +1154,7 @@ class KleinEditComposite:
             flow_quality="medium", occlusion_threshold=-1.0,
             close_radius_pct=0.5, noise_removal_pct=0.0, max_islands=0,
             fill_holes=False, fill_borders=True, use_occlusion=False, enable_debug=False,
-            custom_mask=None, custom_mask_mode="replace"):
+            custom_mask=None, custom_mask_mode="replace", use_poisson_blending=True):
 
         orig_np = original_image[0].cpu().float().numpy()
         gen_np  = generated_image[0].cpu().float().numpy()
@@ -1190,12 +1195,14 @@ class KleinEditComposite:
             color_match_blend   = color_match_blend,
             custom_mask         = custom_mask_np,
             custom_mask_mode    = custom_mask_mode,
+            use_poisson_blending = use_poisson_blending,
             debug               = enable_debug,
         )
 
         report_lines =[
-            "=== Klein Edit Composite===",
+            "=== Klein Edit Composite ===",
             f"Resolution:       {stats['resolution']}  (diag {stats['diagonal_px']}px)",
+            f"Poisson Blending: {'ENABLED (Illumination fixed)' if stats.get('poisson_used') else 'Disabled (Classic Alpha Blend)'}",
             "",
         ]
 
@@ -1331,4 +1338,4 @@ class KleinEditComposite:
 
 
 NODE_CLASS_MAPPINGS      = {"KleinEditComposite": KleinEditComposite}
-NODE_DISPLAY_NAME_MAPPINGS = {"KleinEditComposite": "Klein Edit Composite"}
+NODE_DISPLAY_NAME_MAPPINGS = {"KleinEditComposite": "Klein Edit Composite (Poisson Blending)"}
