@@ -315,13 +315,18 @@ def _seamless_blend(orig_float: np.ndarray, gen_float: np.ndarray, mask_float: n
     binary_mask[0, :] = 0; binary_mask[-1, :] = 0
     binary_mask[:, 0] = 0; binary_mask[:, -1] = 0
     
-    y_idx, x_idx = np.where(binary_mask > 0)
+    # FIX FOR PIXEL SHIFTING:
+    # We must calculate the center using cv2.boundingRect exactly as cv2.seamlessClone 
+    # calculates it internally. Using numpy min/max math causes a 1-pixel shift mismatch.
+    x, y, w, h = cv2.boundingRect(binary_mask)
     m3 = mask_float[..., np.newaxis]
     
-    if len(y_idx) == 0 or len(x_idx) == 0:
+    # If the mask is empty, return standard Alpha blend
+    if w == 0 or h == 0:
         return np.clip(orig_float * (1.0 - m3) + gen_float * m3, 0, 1)
         
-    center = ((np.min(x_idx) + np.max(x_idx)) // 2, (np.min(y_idx) + np.max(y_idx)) // 2)
+    # Calculate the exact mathematical center expected by OpenCV
+    center = (x + w // 2, y + h // 2)
     
     try:
         # NORMAL_CLONE mathematically matches the internal gradients to the background (orig)
